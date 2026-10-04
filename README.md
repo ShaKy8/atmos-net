@@ -170,6 +170,12 @@ against an undocumented `BarWidget` contract (500–960 lines in every stock
 example), and a widget that throws at runtime degrades the whole bar. The
 stock `omarchy.weather` pill already occupies that slot.
 
+**Companion HUD.** [SYS//NET](https://github.com/ShaKy8/sysnet-hud) paints a system
+readout (CPU, memory, storage, tasks, network traffic) over this wallpaper and reads
+`/api/hud` for alerts, rain and AQI. It lines up with the wallpaper's readout, so
+keep to the layout contract in the comment at the top of `public/wallpaper.html`
+if you change that block.
+
 ## Layout
 
 ```

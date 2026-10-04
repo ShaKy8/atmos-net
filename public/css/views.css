@@ -1,0 +1,719 @@
+/* ============================================================
+   Per-view layouts, the scrubber, overlays and boot sequence
+   ============================================================ */
+
+/* ------------------------------------------------------------ boot */
+
+#boot {
+  position: fixed; inset: 0; z-index: 50;
+  background: var(--void);
+  display: grid; place-items: center;
+  transition: opacity .6s var(--ease), visibility 0s .6s;
+}
+#boot.done { opacity: 0; visibility: hidden; pointer-events: none; }
+.boot-inner { width: min(560px, 86vw); }
+#bootLog {
+  font-family: var(--mono); font-size: max(.72rem, var(--fs-floor, 0px)); line-height: 1.75;
+  color: var(--cy);
+  white-space: pre-wrap; min-height: 210px;
+}
+#bootLog .ok  { color: var(--lm); }
+#bootLog .err { color: var(--rd); }
+#bootLog .mut { color: var(--faint); }
+#bootLog::after {
+  content: '▊'; animation: blink 1s steps(2) infinite; color: var(--mg);
+}
+
+/* ------------------------------------------------------- scrubber */
+
+#scrub {
+  position: relative; z-index: 4;
+  height: var(--scrub);
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 14px 4px;
+  background: linear-gradient(0deg, color-mix(in srgb, var(--panel-solid) 94%, transparent), color-mix(in srgb, var(--panel-solid) 62%, transparent));
+  border-top: 1px solid color-mix(in srgb, var(--cy) 18%, transparent);
+  backdrop-filter: blur(10px);
+}
+#scrub::before {
+  content: ''; position: absolute; left: 0; right: 0; top: -1px; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(240,122,166,.5) 25%, color-mix(in srgb, var(--cy) 50%, transparent) 75%, transparent);
+}
+
+.tl-controls { display: flex; align-items: center; gap: 5px; }
+.tl-btn {
+  font-family: var(--ui); font-size: max(.68rem, var(--fs-floor, 0px)); font-weight: 600; letter-spacing: .1em;
+  background: color-mix(in srgb, var(--cy) 6%, transparent); color: var(--dim);
+  border: 1px solid color-mix(in srgb, var(--cy) 18%, transparent);
+  padding: 6px 10px; cursor: pointer; min-width: 34px;
+  clip-path: polygon(4px 0,100% 0,100% calc(100% - 4px),calc(100% - 4px) 100%,0 100%,0 4px);
+  transition: all .16s;
+}
+.tl-btn:hover { color: var(--ink); border-color: var(--cy); background: color-mix(in srgb, var(--cy) 13%, transparent); }
+.tl-btn.on { background: var(--cy); color: var(--void); border-color: var(--cy); box-shadow: 0 0 8px color-mix(in srgb, var(--cy) 22%, transparent); }
+.tl-btn.sm { min-width: 26px; padding: 4px 6px; font-size: max(.6rem, var(--fs-floor, 0px)); }
+.tl-play { font-size: max(.75rem, var(--fs-floor, 0px)); }
+.tl-rate { display: flex; align-items: center; gap: 3px; margin-left: 6px; }
+.tl-rate .lbl { font-size: max(.52rem, var(--fs-floor, 0px)); letter-spacing: .12em; color: var(--faint); text-transform: uppercase; margin-right: 2px; }
+
+.tl-readout { display: flex; flex-direction: column; gap: 1px; min-width: 132px; }
+.tl-when b {
+  display: block; font-family: var(--mono); font-size: 1.15rem; font-weight: 700;
+  color: var(--ink); line-height: 1.05; font-variant-numeric: tabular-nums;
+}
+.tl-when span { font-size: max(.6rem, var(--fs-floor, 0px)); letter-spacing: .12em; text-transform: uppercase; color: var(--faint); }
+.tl-delta {
+  font-family: var(--mono); font-size: max(.66rem, var(--fs-floor, 0px)); font-weight: 700; letter-spacing: .08em;
+  margin-top: 2px; align-self: flex-start;
+  padding: 1px 6px;
+  clip-path: polygon(3px 0,100% 0,100% calc(100% - 3px),calc(100% - 3px) 100%,0 100%,0 3px);
+}
+.tl-delta.now  { background: rgba(143,220,106,.16); color: var(--lm); }
+.tl-delta.fwd  { background: rgba(240,122,166,.16); color: var(--mg); }
+.tl-delta.back { background: rgba(179,157,250,.16); color: var(--vi); }
+
+.tl-canvas { width: 100%; height: 100%; display: block; min-height: 74px; }
+
+/* ============================================================ DECK */
+
+.deck {
+  height: 100%;
+  display: grid;
+  grid-template-columns: minmax(260px, 3.4fr) minmax(0, 5.2fr) minmax(230px, 3fr);
+  grid-template-rows: minmax(0, 1.45fr) minmax(0, .92fr) minmax(0, 1.15fr);
+  gap: var(--gap);
+  grid-template-areas:
+    "hero  meteo  side"
+    "gauge gauge  side"
+    "act   tenday tenday";
+}
+.deck > .hero   { grid-area: hero; }
+.deck > .meteo  { grid-area: meteo; }
+.deck > .side   { grid-area: side; }
+.deck > .gauge  { grid-area: gauge; }
+.deck > .act    { grid-area: act; }
+.deck > .tenday { grid-area: tenday; }
+
+/* --- hero --- */
+.hero { --ac: var(--cy); justify-content: space-between; }
+.hero-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.hero-temp {
+  font-family: var(--ui); font-weight: 700;
+  font-size: clamp(4.6rem, 9.5vw, 9rem);
+  line-height: .84; letter-spacing: -.035em;
+  color: var(--ink);
+}
+.hero-temp sup { font-size: .3em; vertical-align: super; opacity: .55; font-weight: 600; }
+.hero-cond {
+  font-size: clamp(.95rem, 1.5vw, 1.35rem); font-weight: 700; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--cy); margin-top: 2px;
+}
+.hero-feels { font-family: var(--mono); font-size: max(.78rem, var(--fs-floor, 0px)); color: var(--dim); margin-top: 5px; }
+.hero-feels b { color: var(--ink); }
+.hero-obs {
+  font-family: var(--mono); font-size: max(.66rem, var(--fs-floor, 0px)); color: var(--faint);
+  margin-top: 4px; letter-spacing: .02em;
+}
+.hero-obs b { color: var(--lm); font-weight: 700; }
+.hero-obs span { color: var(--faint); }
+.hero-obs em { font-style: normal; color: var(--am); }
+.hero-glyph { font-size: clamp(2.2rem, 4vw, 3.4rem); line-height: 1; opacity: .9; filter: drop-shadow(0 0 10px color-mix(in srgb, var(--cy) 20%, transparent)); }
+.hero-range { display: flex; gap: 16px; margin-top: 8px; }
+.hero-range .stat .v { font-size: 1.25rem; }
+.hero-spark { height: 42px; margin-top: auto; }
+.hero-sun {
+  display: flex; gap: 14px; margin-top: 8px;
+  border-top: 1px solid rgba(255,255,255,.07); padding-top: 8px;
+}
+
+/* --- gauge band --- */
+.gauge .body { flex-direction: row; gap: 4px; align-items: stretch; }
+.gauge-cell {
+  flex: 1 1 0; min-width: 0; position: relative;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+}
+.gauge-cell + .gauge-cell::before {
+  content: ''; position: absolute; left: 0; top: 12%; bottom: 12%; width: 1px;
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--cy) 16%, transparent), transparent);
+}
+.gauge-cell canvas { width: 100%; flex: 1 1 auto; min-height: 0; }
+.gauge-note {
+  flex: 0 0 auto; text-align: center; padding: 0 4px 1px;
+  font-size: max(.52rem, var(--fs-floor, 0px)); letter-spacing: .09em; text-transform: uppercase;
+  color: var(--faint); pointer-events: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* --- side column --- */
+/*
+ * Scrolls. The stack is taller than its grid row on a short window and was
+ * silently clipping SUN & MOON in half — nothing overflowed the page, so
+ * neither the layout nor the audits could see it. `min-height: 0` is what
+ * lets a flex child in a grid row actually shrink instead of pushing out.
+ */
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.side > .panel { flex: 0 0 auto; }
+/*
+ * `grow` meant "take the leftover space" back when this column could not
+ * scroll. In a scroller it means the opposite — flex: 1 1 auto let SUN & MOON
+ * shrink to its own header and lose the moon entirely. Natural height, and the
+ * column scrolls instead.
+ */
+.side > .panel.grow { flex: 0 0 auto; min-height: 148px; }
+
+.alert-item {
+  --ac: var(--rd);
+  padding: 7px 9px; margin-bottom: 6px;
+  background: color-mix(in srgb, var(--ac) 12%, transparent);
+  border-left: 2px solid var(--ac);
+  cursor: pointer;
+}
+.alert-item:last-child { margin-bottom: 0; }
+.alert-item b {
+  display: block; font-size: max(.68rem, var(--fs-floor, 0px)); letter-spacing: .09em; text-transform: uppercase;
+  /* The alert colour mixed toward --ink, as the panel headers are: pure
+     alert red on its own tinted ground measured 4.3:1 on a live Extreme
+     Heat Watch. */
+  color: color-mix(in srgb, var(--ac) 65%, var(--ink)); margin-bottom: 2px;
+}
+.alert-item span { font-size: max(.6rem, var(--fs-floor, 0px)); color: var(--dim); font-family: var(--mono); }
+
+.nowcast { display: flex; flex-direction: column; gap: 6px; }
+.nowcast-line { font-size: .84rem; font-weight: 600; line-height: 1.35; color: var(--ink); }
+.nowcast-line.wet { color: var(--cy); }
+.nowcast-bars { height: 30px; }
+.nowcast-scale { display: flex; justify-content: space-between; font-size: max(.52rem, var(--fs-floor, 0px)); color: var(--faint); letter-spacing: .1em; }
+
+/* --- activity ---
+ *
+ * Readable at a glance, measured on the live page. The rows were a thin
+ * monospace at 9.6-10.8px - at 1920 wide the panel is 549px across and the
+ * text stayed that small, because the console's root is a fixed 15px. They
+ * now use the interface face ELSEWHERE uses beside them (0.86rem, which
+ * reads easily), and the panel is a size container so the type grows with
+ * the room it has: clamp(floor, cqi, ceiling), about 15px in the 549px panel
+ * and the floor in a 361px one. The reading area has a steadier backing, so
+ * the city lights behind the translucent glass cannot pull the secondary
+ * lines under ~6:1 (they reached 3.1:1). Nothing a reader needs is --faint.
+ */
+.act .body {
+  /* Secondary text in this panel: --dim lifted a quarter toward --ink,
+     about 8:1 rather than 6:1, still plainly below the best line's 16:1. */
+  --act-2nd: var(--dim);
+  gap: 0; overflow-y: auto;
+  container-type: inline-size;
+  background: color-mix(in srgb, var(--panel-solid) 60%, transparent);
+  border-radius: 2px;
+}
+.act-row {
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center;
+  column-gap: 12px; padding: 8px 6px;
+  /* A button (tap to see why), so undo the UA's button look. */
+  width: 100%; background: none; border: 0; color: inherit; font: inherit;
+  text-align: left; cursor: pointer;
+}
+.act-row:disabled { cursor: default; }
+.act-row:hover:not(:disabled) { background: rgba(255,255,255,.025); }
+.act-row:focus-visible { outline: 1px solid var(--cy); outline-offset: -1px; }
+.act-why + .act-row, .act-row + .act-row { border-top: 1px solid rgba(255,255,255,.06); }
+.act-icon {
+  font-size: clamp(1.05rem, 3.2cqi, 1.4rem); width: 1.6em; text-align: center;
+  filter: drop-shadow(0 0 3px color-mix(in srgb, currentColor 50%, transparent));
+}
+.act-text { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.act-name {
+  font-family: var(--ui); font-weight: 700; text-transform: uppercase;
+  font-size: clamp(.8rem, 2.3cqi, .9rem); letter-spacing: .12em; color: var(--ink);
+}
+.act-row[aria-expanded="true"] .act-name::after { content: " ▾"; color: var(--act-2nd); }
+.act-when { display: flex; flex-direction: column; gap: 1px; font-family: var(--ui); line-height: 1.3; color: var(--act-2nd); }
+.act-best { color: var(--ink); font-weight: 600; font-size: clamp(.86rem, 2.75cqi, 1.05rem); }
+.act-good { color: var(--act-2nd); font-size: clamp(.8rem, 2.5cqi, .98rem); }
+.act-note { color: var(--act-2nd); font-size: clamp(.8rem, 2.3cqi, .9rem); }
+.act-bar { height: 2px; margin-top: 5px; }
+.act-score {
+  font-family: var(--mono); font-weight: 700; text-align: right;
+  font-size: clamp(1.3rem, 4.2cqi, 1.8rem); line-height: 1.05; font-variant-numeric: tabular-nums;
+}
+.act-unit {
+  display: block; margin-top: 2px; font-family: var(--ui); font-weight: 500;
+  font-size: clamp(.8rem, 2.2cqi, .9rem); letter-spacing: .02em; color: var(--act-2nd); white-space: nowrap;
+}
+.act-why {
+  display: grid; gap: 4px; padding: 2px 8px 10px calc(1.6em + 18px);
+  font-family: var(--ui); font-size: clamp(.8rem, 2.3cqi, .9rem); color: var(--act-2nd);
+}
+.act-why[hidden] { display: none; }
+.act-whyhd { color: var(--act-2nd); margin-bottom: 2px; }
+.act-factor { display: grid; grid-template-columns: minmax(0, 9em) 1fr auto; align-items: center; gap: 10px; }
+.act-fname { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.act-fbar { height: 3px; }
+.act-fpts { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--act-2nd); white-space: nowrap; }
+
+/* --- ten day --- */
+.tenday .body { overflow: hidden; }
+.tenday-grid {
+  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
+  height: 100%; gap: 1px;
+}
+.tenday-col {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 4px 2px; min-width: 0; position: relative; cursor: pointer;
+  transition: background .2s;
+}
+.tenday-col:hover { background: color-mix(in srgb, var(--cy) 7%, transparent); }
+.tenday-col.today { background: color-mix(in srgb, var(--cy) 6%, transparent); }
+.tenday-col.today::before {
+  content: ''; position: absolute; inset: 0 auto 0 0; width: 2px;
+  background: var(--cy); box-shadow: 0 0 8px var(--cy);
+}
+.td-day { font-size: max(.56rem, var(--fs-floor, 0px)); font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
+.td-date { font-size: max(.5rem, var(--fs-floor, 0px)); color: var(--faint); font-family: var(--mono); }
+.td-glyph { font-size: 1.05rem; line-height: 1.1; }
+.td-bar { flex: 1 1 auto; width: 5px; position: relative; min-height: 16px; background: rgba(255,255,255,.05); }
+.td-bar i { position: absolute; left: 0; right: 0; display: block; }
+.td-hi { font-family: var(--mono); font-size: max(.74rem, var(--fs-floor, 0px)); font-weight: 700; color: var(--ink); }
+.td-lo { font-family: var(--mono); font-size: max(.62rem, var(--fs-floor, 0px)); color: var(--faint); }
+.td-pop { font-size: max(.52rem, var(--fs-floor, 0px)); font-family: var(--mono); color: var(--ice); min-height: 12px; }
+
+/* ------------------------------------------------------------ modal */
+
+.modal {
+  position: fixed; inset: 0; z-index: 40;
+  display: grid; place-items: start center;
+  padding: 8dvh 16px 16px;
+  overflow-y: auto;
+  background: rgba(15,24,38,.72);
+  backdrop-filter: blur(6px);
+  animation: fade .18s var(--ease);
+}
+.modal[hidden] { display: none; }
+@keyframes fade { from { opacity: 0; } }
+.modal-card {
+  --ac: var(--cy);
+  width: min(620px, 100%); max-height: 76dvh;
+  padding: 16px 18px;
+  animation: rise .22s var(--ease);
+}
+@keyframes rise { from { transform: translateY(10px); opacity: 0; } }
+
+.search-input {
+  /* 16px exactly: below that iOS auto-zooms the viewport on focus, and the
+     page cannot be scrolled back because the shell hides body overflow. */
+  width: 100%; font-family: var(--mono); font-size: 16px;
+  background: color-mix(in srgb, var(--void) 80%, transparent); border: 1px solid color-mix(in srgb, var(--cy) 30%, transparent);
+  color: var(--ink); padding: 10px 12px; outline: none;
+  clip-path: polygon(6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%,0 6px);
+}
+.search-input:focus { border-color: var(--cy); box-shadow: 0 0 10px color-mix(in srgb, var(--cy) 18%, transparent); }
+.search-input::placeholder { color: var(--faint); }
+
+.res-list { margin-top: 10px; overflow-y: auto; max-height: 48dvh; }
+.res-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: background .14s, border-color .14s;
+}
+.res-item:hover, .res-item.sel { background: color-mix(in srgb, var(--cy) 9%, transparent); border-left-color: var(--cy); }
+.res-item b { font-size: .84rem; font-weight: 600; color: var(--ink); }
+.res-item span { font-size: max(.62rem, var(--fs-floor, 0px)); color: var(--dim); letter-spacing: .08em; }
+.res-item .coord { margin-left: auto; font-family: var(--mono); font-size: max(.58rem, var(--fs-floor, 0px)); color: var(--faint); }
+.res-item .rm {
+  margin-left: 8px; color: var(--faint); background: none; border: 0; cursor: pointer; font-size: .8rem;
+}
+.res-item .rm:hover { color: var(--rd); }
+
+.modal h3 {
+  font-size: max(.62rem, var(--fs-floor, 0px)); font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--faint); margin: 14px 0 4px;
+}
+.modal h3:first-child { margin-top: 0; }
+
+.keyhelp { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 4px 18px; }
+.keyhelp div { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; font-size: max(.7rem, var(--fs-floor, 0px)); color: var(--dim); border-bottom: 1px solid rgba(255,255,255,.04); }
+.keyhelp kbd {
+  font-family: var(--mono); font-size: max(.62rem, var(--fs-floor, 0px)); color: var(--cy);
+  border: 1px solid color-mix(in srgb, var(--cy) 30%, transparent); padding: 0 5px; background: color-mix(in srgb, var(--cy) 7%, transparent);
+}
+
+.setrow { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,.05); }
+.setrow label { font-size: max(.72rem, var(--fs-floor, 0px)); color: var(--ink); }
+.setrow .hint { font-size: max(.58rem, var(--fs-floor, 0px)); color: var(--faint); display: block; margin-top: 1px; }
+.seg { display: flex; gap: 2px; }
+.seg button {
+  font-family: var(--ui); font-size: max(.6rem, var(--fs-floor, 0px)); font-weight: 600; letter-spacing: .1em;
+  padding: 4px 9px; cursor: pointer; text-transform: uppercase;
+  background: color-mix(in srgb, var(--cy) 6%, transparent); border: 1px solid color-mix(in srgb, var(--cy) 18%, transparent); color: var(--dim);
+}
+.seg button.on { background: var(--cy); color: var(--void); border-color: var(--cy); }
+
+/* Full-bleed canvas inside a panel. A replaced element ignores inset:0
+   for sizing, so width/height must be stated explicitly. */
+.fill { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+/* ============================================================ RADAR */
+
+.radar-wrap {
+  height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+  gap: var(--gap);
+}
+.radar-main { position: relative; overflow: hidden; }
+.radar-main canvas#r-map { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+.radar-hud {
+  position: absolute; top: 10px; left: 12px; z-index: 3;
+  pointer-events: none; display: flex; flex-direction: column; gap: 8px;
+  align-items: flex-start;
+}
+.radar-stamp {
+  background: color-mix(in srgb, var(--panel-solid) 78%, transparent); backdrop-filter: blur(6px);
+  border-left: 2px solid var(--cy);
+  padding: 5px 10px;
+}
+.radar-stamp b {
+  display: block; font-family: var(--mono); font-size: 1.05rem; font-weight: 700;
+  color: var(--ink); line-height: 1.1; font-variant-numeric: tabular-nums;
+}
+.radar-stamp span { font-size: max(.54rem, var(--fs-floor, 0px)); letter-spacing: .12em; text-transform: uppercase; color: var(--lm); }
+
+.radar-legend {
+  display: flex; align-items: center; gap: 9px;
+  background: color-mix(in srgb, var(--panel-solid) 80%, transparent); backdrop-filter: blur(6px);
+  padding: 6px 10px; flex-wrap: nowrap;
+}
+.radar-legend b { display: flex; align-items: center; gap: 4px; font-weight: 600; }
+.radar-legend i { width: 13px; height: 6px; display: block; flex: 0 0 auto; }
+.radar-legend b, .radar-legend .lg-title {
+  font-size: max(.48rem, var(--fs-floor, 0px)); letter-spacing: .1em; text-transform: uppercase; color: var(--dim);
+  white-space: nowrap;
+}
+.radar-legend .lg-title { color: var(--faint); border-right: 1px solid rgba(255,255,255,.12); padding-right: 9px; }
+
+.radar-tools {
+  position: absolute; top: 10px; right: 12px; z-index: 3;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.radar-tools .tl-btn { min-width: 30px; padding: 6px 0; text-align: center; }
+/* Buttons that float on a map sit on whatever tile is under them, and the
+   bright ones took their glyphs to 2.5:1; they carry their own ground. */
+.radar-tools .tl-btn:not(.on), .radar-frames .tl-btn:not(.on) { background: color-mix(in srgb, var(--panel-solid) 88%, transparent); }
+
+.radar-frames {
+  position: absolute; left: 12px; right: 12px; bottom: 10px; z-index: 3;
+  display: flex; align-items: center; gap: 8px;
+  background: color-mix(in srgb, var(--panel-solid) 78%, transparent); backdrop-filter: blur(6px);
+  padding: 6px 8px;
+}
+.radar-frames canvas { flex: 1; height: 22px; display: block; cursor: pointer; }
+
+.radar-side { display: flex; flex-direction: column; gap: var(--gap); min-height: 0; }
+.radar-side > .panel { flex: 0 0 auto; }
+.radar-side > .panel.grow { flex: 1 1 auto; min-height: 0; }
+
+/* ========================================================= OVERHEAD */
+
+/* Same shape as the radar: a map that takes what it can, a rail of readouts. */
+.oh-wrap {
+  height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+  gap: var(--gap);
+}
+.oh-main { position: relative; overflow: hidden; }
+.oh-main canvas#o-map { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+.oh-side { display: flex; flex-direction: column; gap: var(--gap); min-height: 0; }
+.oh-side > .panel { flex: 0 0 auto; }
+.oh-side > .panel.grow { flex: 1 1 auto; min-height: 0; }
+
+/* A row in NEAREST is a button, because tapping one selects that aircraft. */
+.oh-head, .oh-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 4.2em 3.4em;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 5px 8px;
+  text-align: left;
+}
+.oh-head {
+  font-size: max(.54rem, var(--fs-floor, 0px)); letter-spacing: .12em; text-transform: uppercase;
+  color: var(--faint);
+  border-bottom: 1px solid rgba(255,255,255,.08);
+}
+.oh-row {
+  background: none; border: 0;
+  border-bottom: 1px solid rgba(255,255,255,.05);
+  color: var(--ink); font: inherit; cursor: pointer;
+  transition: background .15s;
+}
+.oh-row:hover { background: color-mix(in srgb, var(--cy) 6%, transparent); }
+.oh-row[aria-pressed="true"] { background: color-mix(in srgb, var(--cy) 13%, transparent); }
+.oh-cs { font-family: var(--mono); font-weight: 600; font-size: max(.72rem, var(--fs-floor, 0px));
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.oh-t { font-size: max(.58rem, var(--fs-floor, 0px)); letter-spacing: .08em; color: var(--faint); }
+.oh-d, .oh-a { font-family: var(--mono); font-size: max(.64rem, var(--fs-floor, 0px)); text-align: right; }
+.oh-d { color: var(--dim); }
+.oh-a { color: var(--faint); }
+
+/* ============================================================== SKY */
+
+.skyview {
+  height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(220px, 1fr) minmax(220px, 1fr);
+  grid-template-rows: minmax(0, .82fr) minmax(0, 1.18fr);
+  gap: var(--gap);
+  grid-template-areas:
+    "dome moon sun"
+    "dome kp   see";
+}
+.skyview > .dome-panel { grid-area: dome; position: relative; }
+.skyview > .moon-panel { grid-area: moon; }
+.skyview > .sun-panel  { grid-area: sun; }
+.skyview > .panel:nth-of-type(4) { grid-area: kp; }
+.skyview > .panel:nth-of-type(5) { grid-area: see; overflow-y: auto; }
+
+/* --- TONIGHT: the planning strip under the observing score --------------- */
+
+/*
+ * A sibling of .body rather than inside it, because the score above rewrites
+ * its own innerHTML wholesale on every frame and this does not need to be
+ * rebuilt with it.
+ */
+.tn {
+  border-top: 1px solid rgba(255,255,255,.08);
+  margin: 8px 12px 0;
+  padding: 8px 0 10px;
+}
+.tn-verdict {
+  margin: 0 0 9px;
+  font-size: max(.72rem, var(--fs-floor, 0px));
+  line-height: 1.5;
+  color: var(--ink);
+}
+.tn-week { display: flex; gap: 3px; align-items: flex-end; }
+.tn-n {
+  flex: 1 1 0; min-width: 0;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+}
+.tn-bar {
+  width: 100%; height: 34px;
+  display: flex; align-items: flex-end;
+  background: rgba(255,255,255,.05);
+}
+.tn-bar > i { display: block; width: 100%; min-height: 2px; opacity: .85; }
+.tn-h, .tn-d {
+  font-family: var(--mono);
+  font-size: max(.54rem, var(--fs-floor, 0px));
+  letter-spacing: .04em;
+  color: var(--faint);
+  white-space: nowrap;
+}
+.tn-n.pick .tn-h, .tn-n.pick .tn-d { color: var(--ink); font-weight: 600; }
+.tn-n.pick .tn-bar { outline: 1px solid color-mix(in srgb, var(--cy) 45%, transparent); }
+/* Tonight is always first; underlining it saves abbreviating "tonight" into
+   something cryptic inside a 44px column. */
+.tn-n.now .tn-d { color: var(--ink); border-bottom: 1px solid var(--cy); }
+.tn-bar > i { transition: height .2s var(--ease, ease); }
+.tn-key {
+  margin: 7px 0 0;
+  font-size: max(.56rem, var(--fs-floor, 0px));
+  letter-spacing: .1em; text-transform: uppercase;
+  color: var(--faint);
+}
+
+.dome-cap {
+  position: absolute; left: 12px; right: 12px; bottom: 9px;
+  display: flex; justify-content: space-between; pointer-events: none;
+}
+.sunmoon-body { flex-direction: row !important; gap: 12px; align-items: flex-start; }
+.sunmoon-body canvas { width: 74px; height: 74px; flex: 0 0 74px; }
+.moon-body { flex-direction: row !important; gap: 12px; align-items: flex-start; }
+.moon-body canvas { width: 88px; height: 88px; flex: 0 0 88px; }
+
+/* ============================================================== AIR */
+
+.airview {
+  height: 100%;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1.1fr) minmax(0, 1.1fr) minmax(0, .8fr);
+  gap: var(--gap);
+  grid-template-areas:
+    "aqi  pol  pln"
+    "uv   cmf  pln"
+    "fc   fc   fc";
+}
+.airview > .aqi-panel            { grid-area: aqi; }
+.airview > .panel:nth-of-type(2) { grid-area: pol; overflow-y: auto; }
+.airview > .panel:nth-of-type(3) { grid-area: pln; overflow-y: auto; }
+.airview > .panel:nth-of-type(4) { grid-area: uv; }
+.airview > .panel:nth-of-type(5) { grid-area: cmf; overflow-y: auto; }
+.airview > .panel:nth-of-type(6) { grid-area: fc; }
+
+.aqi-body { flex-direction: row !important; gap: 10px; align-items: stretch; }
+.aqi-body canvas { flex: 0 0 44%; min-width: 110px; height: 100%; align-self: stretch; }
+.aqi-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.aqi-cat { font-size: .92rem; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
+.aqi-note { font-size: max(.6rem, var(--fs-floor, 0px)); color: var(--dim); line-height: 1.45; margin-top: 3px; }
+
+.burngrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px 8px; }
+.burngrid div { display: flex; justify-content: space-between; gap: 5px; align-items: baseline; }
+.burngrid b { font-family: var(--mono); font-size: max(.68rem, var(--fs-floor, 0px)); }
+
+.dewstrip { display: flex; gap: 2px; height: 8px; margin-top: 3px; }
+.dewstrip i { flex: 1; background: rgba(255,255,255,.07); display: block; transition: all .3s var(--ease); }
+.dewstrip i.on { background: var(--c); box-shadow: 0 0 10px var(--c); transform: scaleY(1.7); }
+
+.pollen-fc { display: flex; gap: 5px; align-items: flex-end; flex: 1 1 auto; min-height: 62px; }
+.pollen-fc > div {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  justify-content: flex-end; gap: 2px; height: 100%;
+}
+/* As charts.js capBar draws them: body at 60%, a full-strength cap, no glow. */
+.pollen-fc .bar { width: 60%; display: block; min-height: 3px;
+  background: color-mix(in srgb, var(--c) 60%, transparent); border-top: 2.5px solid var(--c); }
+.pollen-fc b { font-family: var(--mono); font-size: max(.58rem, var(--fs-floor, 0px)); color: var(--ink); }
+.pollen-fc span { font-size: max(.48rem, var(--fs-floor, 0px)); letter-spacing: .1em; color: var(--faint); text-transform: uppercase; }
+
+/* ============================================================= DATA */
+
+.dataview {
+  height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(225px, .78fr);
+  grid-template-rows: minmax(0, 1.05fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--gap);
+  grid-template-areas:
+    "clim   clim   stats"
+    "spread trend  stats"
+    "meteo  meteo  deriv";
+}
+.dataview > .data-climate { grid-area: clim; }
+.dataview > .data-spread  { grid-area: spread; }
+.dataview > .data-stats   { grid-area: stats; overflow-y: auto; }
+.dataview > .data-trend   { grid-area: trend; }
+.dataview > .data-derived { grid-area: deriv; overflow-y: auto; }
+.dataview > .data-meteo   { grid-area: meteo; }
+
+/* ------------------------------------------------ narrower windows */
+
+/* ---------------------------------------------------------------- ELSEWHERE
+   Two columns: the place, and what it is like there compared with here. The
+   "here" row is a divider rather than another row, because which side of it a
+   place falls on is the entire question. */
+.elsewhere { --ac: var(--am); }
+
+.elsewhere .ew-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ew-row,
+.ew-here {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 14px;
+  padding: 5px 2px;
+  font-size: 0.86rem;
+}
+
+.ew-row .ew-name { color: var(--dim); }
+.ew-row.is-better .ew-name { color: var(--ink); }
+.ew-row.is-better::before {
+  content: '\2191';
+  color: var(--ok, #6fd49a);
+  margin-right: -8px;
+  font-size: 0.8rem;
+}
+
+.ew-what {
+  color: var(--dim);
+  text-align: right;
+  font-size: 0.8rem;
+}
+
+.ew-row.is-better .ew-what { color: var(--am); }
+
+/* The line the list is split by. */
+.ew-here {
+  border-top: 1px solid color-mix(in srgb, var(--cy) 32%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--cy) 32%, transparent);
+  margin: 4px 0;
+  color: var(--cy);
+}
+
+.ew-here .ew-name { color: var(--cy); }
+.ew-here .ew-what { color: var(--cy); opacity: 0.75; }
+
+.ew-say {
+  margin: 10px 0 0;
+  color: var(--ink);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.ew-empty { color: var(--faint); font-size: 0.85rem; padding: 4px 2px; }
+
+@media (max-width: 700px) {
+  /* Stacked: at 360px the two columns collide and the comparison, which is
+     the longer half, is the one that gets crushed. */
+  .ew-row,
+  .ew-here {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+  }
+  .ew-what { text-align: left; }
+  .ew-row.is-better::before { margin-right: 0; }
+}
+
+@media (max-width: 1250px) {
+  .deck {
+    grid-template-columns: minmax(240px, 1fr) minmax(0, 1.6fr);
+    grid-template-rows: auto auto auto auto;
+    grid-template-areas:
+      "hero  meteo"
+      "side  meteo"
+      "gauge gauge"
+      "act   tenday";
+    overflow-y: auto;
+  }
+  .airview, .dataview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: none;
+    grid-auto-rows: minmax(190px, auto);
+    grid-template-areas: none;
+    overflow-y: auto;
+  }
+  .airview > .panel, .dataview > .panel { grid-area: auto !important; }
+  .airview > .panel:nth-of-type(6), .dataview > .data-meteo { grid-column: 1 / -1; }
+  .skyview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: none;
+    grid-auto-rows: minmax(210px, auto);
+    grid-template-areas: none;
+    overflow-y: auto;
+  }
+  .skyview > .panel { grid-area: auto !important; }
+  .skyview > .dome-panel { grid-column: 1 / -1; min-height: 320px; }
+  .radar-wrap { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(340px, 1.6fr) auto; }
+  .radar-side { flex-direction: row; }
+  .radar-side > .panel { flex: 1 1 0; }
+}

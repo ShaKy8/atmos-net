@@ -1,0 +1,9 @@
+[Unit]
+Description=ATMOS//NET weather alert and rain notifications
+After=atmos-net.service
+Requires=atmos-net.service
+
+[Service]
+Type=oneshot
+ExecStart=__PROJECT__/scripts/atmos-notify
+Environment=ATMOS_PORT=7777

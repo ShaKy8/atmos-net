@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+#
+# Weather notifications: severe-weather alerts from the NWS, and a heads-up
+# when rain is about to start. State is kept so nothing is announced twice.
+set -euo pipefail
+
+PORT="${ATMOS_PORT:-7777}"
+STATE_DIR="${HOME}/.local/state/atmos-net"
+STATE="${STATE_DIR}/notified.json"
+mkdir -p "${STATE_DIR}"
+[ -f "${STATE}" ] || echo '{}' > "${STATE}"
+
+CFG="$(curl -sf --max-time 5 "http://localhost:${PORT}/api/config" || true)"
+[ -z "${CFG}" ] && exit 0
+
+LAT="$(printf '%s' "${CFG}" | python3 -c 'import json,sys;print(json.load(sys.stdin)["home"]["latitude"])')"
+LON="$(printf '%s' "${CFG}" | python3 -c 'import json,sys;print(json.load(sys.stdin)["home"]["longitude"])')"
+
+# A saved location in the browser takes precedence if one was exported.
+if [ -f "${STATE_DIR}/location.json" ]; then
+  LAT="$(python3 -c 'import json;d=json.load(open("'"${STATE_DIR}"'/location.json"));print(d["lat"])' 2>/dev/null || echo "$LAT")"
+  LON="$(python3 -c 'import json;d=json.load(open("'"${STATE_DIR}"'/location.json"));print(d["lon"])' 2>/dev/null || echo "$LON")"
+fi
+
+# The analysis script arrives on stdin via heredoc, so the payload has to be
+# handed over as a file rather than a pipe.
+TMP="$(mktemp)"
+trap 'rm -f "${TMP}"' EXIT
+curl -sf --max-time 20 -o "${TMP}" "http://localhost:${PORT}/api/bundle?lat=${LAT}&lon=${LON}" || exit 0
+[ -s "${TMP}" ] || exit 0
+
+python3 - "${STATE}" "${TMP}" <<'PY'
+import json, sys, time, subprocess, os
+
+state_path, bundle_path = sys.argv[1], sys.argv[2]
+bundle = json.load(open(bundle_path))
+try:
+    state = json.load(open(state_path))
+except Exception:
+    state = {}
+
+now = time.time()
+# Forget anything older than two days so the file cannot grow without bound.
+state = {k: v for k, v in state.items() if isinstance(v, (int, float)) and now - v < 172800}
+
+def notify(title, body, urgency="normal", icon="weather-storm", timeout=12000):
+    subprocess.run(
+        ["notify-send", "-a", "ATMOS//NET", "-u", urgency, "-i", icon,
+         "-t", str(timeout), title, body],
+        check=False)
+
+# --- severe weather alerts -------------------------------------------------
+alerts = bundle.get("alerts") or {}
+if alerts.get("ok"):
+    for feat in (alerts["data"].get("features") or []):
+        p = feat.get("properties", {})
+        key = "alert:" + str(p.get("id") or p.get("event"))
+        if key in state:
+            continue
+        sev = (p.get("severity") or "").lower()
+        urgency = "critical" if sev in ("extreme", "severe") else "normal"
+        headline = p.get("headline") or p.get("event") or "Weather alert"
+        notify(f"⚠  {p.get('event', 'Weather alert')}", headline,
+               urgency=urgency, timeout=0 if urgency == "critical" else 15000)
+        state[key] = now
+
+# --- rain starting soon ----------------------------------------------------
+fc = bundle.get("forecast") or {}
+if fc.get("ok"):
+    d = fc["data"]
+    off = d.get("utc_offset_seconds", 0)
+    blocks = []
+    for name in ("minutely_15", "hourly"):
+        b = d.get(name)
+        if b and b.get("time") and b.get("precipitation"):
+            blocks.append(b)
+            break
+    if blocks:
+        b = blocks[0]
+        import datetime
+        def epoch(s):
+            return datetime.datetime.fromisoformat(s + "+00:00").timestamp() - off
+        times = [epoch(t) for t in b["time"]]
+        precip = b["precipitation"]
+        WET = 0.002
+        # Where are we now, and is it already raining?
+        idx = min(range(len(times)), key=lambda i: abs(times[i] - now))
+        raining_now = (precip[idx] or 0) >= WET
+        if not raining_now:
+            for i in range(idx, len(times)):
+                if times[i] - now > 3600:       # only look one hour ahead
+                    break
+                if (precip[i] or 0) >= WET:
+                    mins = int((times[i] - now) / 60)
+                    if mins < 3:
+                        break
+                    # One notification per onset, bucketed to the quarter hour.
+                    key = "rain:%d" % (times[i] // 900)
+                    if key not in state:
+                        amount = precip[i]
+                        heavy = "Heavy rain" if amount > 0.08 else "Rain"
+                        notify(f"☔  {heavy} in {mins} min",
+                               f"Starting around "
+                               + time.strftime("%H:%M", time.localtime(times[i]))
+                               + f" · {amount:.2f} in/hr",
+                               icon="weather-showers")
+                        state[key] = now
+                    break
+
+json.dump(state, open(state_path, "w"))
+PY

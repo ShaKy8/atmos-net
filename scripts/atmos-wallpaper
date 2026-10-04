@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+#
+# Render the live sky as a desktop background and apply it.
+#
+# The image is produced by the portal's own WebGL sky shader at the current
+# conditions, so the wallpaper shows the actual sun position, cloud decks and
+# weather over the configured location.
+#
+# The output filename ALTERNATES between two names on purpose. Omarchy's
+# background plugin short-circuits when the path is unchanged:
+#
+#   /usr/share/omarchy/shell/plugins/background/Background.qml
+#   transitionBackground(): if (!path || (!force && finalPath === currentBackground)) return
+#
+# and the visible Image{cache:true} is sourced from a bare file:// URL with no
+# cache-buster, so Qt would serve the stale pixmap even if that guard were
+# bypassed. Writing the same path every time meant every refresh was silently
+# discarded and the desktop kept showing the very first render. Alternating two
+# paths defeats both, while keeping exactly two files on disk.
+#
+# Renders are skipped when nobody would see them: display off, session locked,
+# and - on battery or deep in the night, when the sky barely moves - whenever
+# the last render is under 4 minutes old. `--force` renders regardless, and
+# also makes the server refetch its live feeds so the numbers are current. For
+# testing, ATMOS_WALLPAPER_ON_BATTERY and ATMOS_WALLPAPER_NIGHT (0/1) override
+# the power and night checks.
+set -euo pipefail
+
+# Borrow the graphical session's environment when run from outside it (an ssh
+# or tool shell, cron). Without DISPLAY the GPU path cannot open, and without
+# the Hyprland signature `hyprctl` fails and the render silently falls back to
+# a guessed 2560x1440, which the real panel then crops.
+if command -v systemctl >/dev/null 2>&1; then
+  SESSION_ENV="$(systemctl --user show-environment 2>/dev/null || true)"
+  for v in DISPLAY WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE XDG_RUNTIME_DIR; do
+    if [ -z "${!v:-}" ]; then
+      val="$(printf '%s\n' "${SESSION_ENV}" | sed -n "s/^${v}=//p" | head -1)"
+      [ -n "${val}" ] && export "${v}=${val}"
+    fi
+  done
+fi
+
+PORT="${ATMOS_PORT:-7777}"
+OUT_DIR="${HOME}/.local/state/atmos-net/wallpaper"
+CURRENT_LINK="${HOME}/.local/state/omarchy/current/background"
+mkdir -p "${OUT_DIR}"
+
+FORCE=0
+[ "${1:-}" = "--force" ] && FORCE=1
+
+skip() { echo "atmos-wallpaper: skipped ($1)"; exit 0; }
+
+if [ "${FORCE}" = 0 ]; then
+  if command -v hyprctl >/dev/null 2>&1 \
+     && hyprctl -j monitors 2>/dev/null | python3 -c 'import json,sys
+m=json.load(sys.stdin)
+sys.exit(0 if m and not any(x.get("dpmsStatus", True) for x in m) else 1)' 2>/dev/null; then
+    skip "display off"
+  fi
+  if [ "$(omarchy-shell lock isLocked 2>/dev/null || true)" = "true" ]; then
+    skip "session locked"
+  fi
+
+  # Minutes since the newest render; large when there is none yet.
+  AGE_MIN=99999
+  NEWEST="$(ls -t "${OUT_DIR}"/sky-*.png 2>/dev/null | head -1 || true)"
+  [ -n "${NEWEST}" ] && AGE_MIN=$(( ( $(date +%s) - $(stat -c %Y "${NEWEST}") ) / 60 ))
+
+  ON_BATTERY="${ATMOS_WALLPAPER_ON_BATTERY:-}"
+  if [ -z "${ON_BATTERY}" ]; then
+    ON_BATTERY=0
+    for ac in /sys/class/power_supply/*/online; do
+      [ -r "${ac}" ] || continue
+      [ "$(cat "${ac}")" = "0" ] && ON_BATTERY=1
+      break
+    done
+  fi
+
+  NIGHT="${ATMOS_WALLPAPER_NIGHT:-}"
+  if [ -z "${NIGHT}" ]; then
+    # Deep night: more than 90 minutes from either end of daylight.
+    NIGHT="$(curl -sf --max-time 5 "http://localhost:${PORT}/api/hud" | python3 -c 'import json,sys,time
+h=json.load(sys.stdin); now=time.time()*1000; m=90*60000
+rise, sset, nxt = h.get("sunrise"), h.get("sunset"), h.get("nextSunrise")
+night = bool(rise and sset and (now < rise - m or (now > sset + m and (not nxt or now < nxt - m))))
+print(1 if night else 0)' 2>/dev/null || echo 0)"
+  fi
+
+  if [ "${AGE_MIN}" -lt 4 ]; then
+    [ "${ON_BATTERY}" = 1 ] && skip "on battery, last render ${AGE_MIN} min ago"
+    [ "${NIGHT}" = 1 ] && skip "night, last render ${AGE_MIN} min ago"
+  fi
+fi
+# Scratch on the SAME filesystem as the target, so the final mv is a real
+# rename(2). From /tmp it would be copy+unlink and the shell could pick up a
+# half-written PNG.
+TMP="$(mktemp -d "${OUT_DIR}/.render.XXXXXX")"
+trap 'rm -rf "$TMP"' EXIT
+
+# Choose whichever slot is not currently displayed, so the path always changes.
+CURRENT="$(readlink -f "${CURRENT_LINK}" 2>/dev/null || true)"
+if [ "${CURRENT}" = "${OUT_DIR}/sky-a.png" ]; then
+  OUT="${OUT_DIR}/sky-b.png"
+else
+  OUT="${OUT_DIR}/sky-a.png"
+fi
+
+# Match the primary monitor so the background is never rescaled.
+if command -v hyprctl >/dev/null 2>&1; then
+  read -r W H < <(hyprctl -j monitors 2>/dev/null \
+    | python3 -c 'import json,sys
+m=json.load(sys.stdin)
+m=[x for x in m if x.get("focused")] or m
+print(m[0]["width"], m[0]["height"]) if m else print(2560,1440)' 2>/dev/null || echo "2560 1440")
+else
+  W=2560; H=1440
+fi
+W="${W:-2560}"; H="${H:-1440}"
+
+if ! curl -sf -o /dev/null --max-time 3 "http://localhost:${PORT}/api/config"; then
+  echo "atmos-wallpaper: server not reachable on :${PORT}" >&2
+  exit 1
+fi
+
+BARE=""
+[ "${FORCE}" = 1 ] && BARE="&fresh"
+[ "${ATMOS_WALLPAPER_BARE:-0}" = "1" ] && BARE="${BARE}&bare"
+
+# Render on the GPU first: ANGLE over the Intel driver costs ~5 s of CPU per
+# render against ~26 s for SwiftShader, with the same image. SwiftShader stays
+# as the fallback for when the GPU path is unavailable (no DRM access, driver
+# trouble), which shows up as a missing or near-empty screenshot.
+render() {
+  rm -f "${TMP}/bg.png"
+  rm -rf "${TMP}/profile"
+  timeout 120 chromium --headless "$@" --hide-scrollbars --no-sandbox \
+    --user-data-dir="${TMP}/profile" \
+    --window-size="${W},${H}" --force-device-scale-factor=1 \
+    --virtual-time-budget=8000 \
+    --screenshot="${TMP}/bg.png" \
+    "http://localhost:${PORT}/wallpaper.html?q=3${BARE}" >/dev/null 2>&1 || true
+  [ -s "${TMP}/bg.png" ] || return 1
+  # A WebGL failure still screenshots fine: the HUD text over a black sky,
+  # ~90 KB, which the old 50 KB floor let through. Real renders measured
+  # 0.015-0.03 (night) and ~0.11 (day) grey stddev over the sky band against
+  # 0.002 for a failure, and 800 KB+ against 91 KB.
+  if command -v magick >/dev/null 2>&1; then
+    magick "${TMP}/bg.png" -crop 100%x55%+0+0 +repage -colorspace gray \
+      -format '%[fx:standard_deviation >= 0.006 ? 1 : 0]' info: 2>/dev/null | grep -qx 1
+  else
+    [ "$(stat -c%s "${TMP}/bg.png")" -ge 300000 ]
+  fi
+}
+
+GPU_FLAGS=(--use-gl=angle --use-angle=gl)
+[ -n "${ATMOS_WALLPAPER_GPU_FLAGS:-}" ] && read -r -a GPU_FLAGS <<< "${ATMOS_WALLPAPER_GPU_FLAGS}"
+
+RENDERER=gpu
+if ! render "${GPU_FLAGS[@]}"; then
+  RENDERER=swiftshader
+  if ! render --disable-gpu --enable-unsafe-swiftshader --use-gl=angle --use-angle=swiftshader; then
+    echo "atmos-wallpaper: render produced no usable image" >&2
+    exit 1
+  fi
+fi
+
+mv "${TMP}/bg.png" "${OUT}"
+
+if command -v omarchy-theme-bg-set >/dev/null 2>&1; then
+  omarchy-theme-bg-set "${OUT}" >/dev/null 2>&1 || omarchy theme bg set "${OUT}" >/dev/null 2>&1 || true
+else
+  omarchy theme bg set "${OUT}" >/dev/null 2>&1 || true
+fi
+
+# Earlier versions wrote into the theme's own backgrounds directory, which is
+# the source list for `omarchy theme bg next` and the background switcher.
+# Sweep every theme, since the old path was theme-scoped.
+for legacy in "${HOME}"/.config/omarchy/backgrounds/*/atmos-live.png; do
+  [ -e "${legacy}" ] && rm -f "${legacy}"
+done
+
+echo "atmos-wallpaper: $(basename "${OUT}") (${W}x${H}, ${RENDERER})"

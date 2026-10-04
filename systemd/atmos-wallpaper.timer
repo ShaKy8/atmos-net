@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh the ATMOS//NET live wallpaper
+
+[Timer]
+# Often enough to follow the light through the day, rare enough to be free.
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,15 @@
+{
+  "name": "atmos-net",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "repository": "github:ShaKy8/atmos-net",
+  "description": "ATMOS//NET — a cyberpunk weather console",
+  "type": "module",
+  "bin": { "atmos": "./server.mjs" },
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs"
+  },
+  "engines": { "node": ">=20" }
+}

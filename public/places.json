@@ -1,0 +1,29 @@
+{
+  "trips": [
+    {
+      "place": "San Francisco, California",
+      "lat": 37.7749,
+      "lon": -122.4194
+    },
+    {
+      "place": "Miami, Florida",
+      "lat": 25.7617,
+      "lon": -80.1918
+    },
+    {
+      "place": "Chicago, Illinois",
+      "lat": 41.8781,
+      "lon": -87.6298
+    },
+    {
+      "place": "Denver, Colorado",
+      "lat": 39.7392,
+      "lon": -104.9903
+    },
+    {
+      "place": "Seattle, Washington",
+      "lat": 47.6062,
+      "lon": -122.3321
+    }
+  ]
+}

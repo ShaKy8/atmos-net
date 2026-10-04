@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+#
+# Open the ATMOS//NET portal fullscreen, or focus it if it is already open.
+#
+# Chromium under Wayland ignores --class in --app mode (it derives its own
+# app_id from the URL), so the window is identified by the process owning the
+# dedicated profile. --start-fullscreen does work and is what opens it full.
+#
+# Omarchy drives Hyprland from Lua, so hyprctl takes hl.dsp.* dispatchers --
+# the classic `hyprctl dispatch focuswindow ...` form is a syntax error here
+# and fails silently.
+set -euo pipefail
+
+PORT="${ATMOS_PORT:-7777}"
+URL="http://localhost:${PORT}/${1:-}"
+PROFILE="${HOME}/.local/share/atmos-net/browser"
+
+# Workspace id of an existing portal window, matched on the owning process so
+# a normal browser tab showing the same page is never mistaken for it.
+portal_window() {
+  command -v hyprctl >/dev/null 2>&1 || return 0
+  local pids
+  pids="$(pgrep -f -- "--user-data-dir=${PROFILE}" 2>/dev/null | tr '\n' ' ')"
+  [ -n "${pids}" ] || return 0
+  hyprctl -j clients 2>/dev/null | PIDS="${pids}" python3 -c '
+import json, os, sys
+want = set(os.environ["PIDS"].split())
+for c in json.load(sys.stdin):
+    if str(c.get("pid")) in want:
+        print(c["workspace"]["id"]); break
+' 2>/dev/null
+}
+
+EXISTING="$(portal_window || true)"
+if [ -n "${EXISTING}" ]; then
+  # Already open: jump to whichever workspace it lives on.
+  hyprctl dispatch "hl.dsp.focus({ workspace = ${EXISTING} })" >/dev/null 2>&1
+  exit 0
+fi
+
+# Wait for the server, starting it through systemd if it is not up yet.
+if ! curl -sf -o /dev/null --max-time 2 "http://localhost:${PORT}/api/config"; then
+  systemctl --user start atmos-net.service 2>/dev/null || true
+  for _ in $(seq 1 40); do
+    curl -sf -o /dev/null --max-time 1 "http://localhost:${PORT}/api/config" && break
+    sleep 0.25
+  done
+fi
+
+chromium \
+  --app="${URL}" \
+  --user-data-dir="${PROFILE}" \
+  --start-fullscreen \
+  --no-first-run --no-default-browser-check \
+  --disable-extensions \
+  --disable-features=TranslateUI \
+  --no-service-autorun --disable-background-networking \
+  --disable-component-update --disable-client-side-phishing-detection \
+  >/dev/null 2>&1 &
+
+# Wait for the window to map so a second press focuses rather than relaunches.
+for _ in $(seq 1 40); do
+  sleep 0.25
+  [ -n "$(portal_window || true)" ] && exit 0
+done

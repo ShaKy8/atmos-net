@@ -1,0 +1,19 @@
+[Unit]
+Description=ATMOS//NET weather console server
+Documentation=https://github.com/ShaKy8/atmos-net
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__PROJECT__
+ExecStart=__NODE__ __PROJECT__/server.mjs
+Environment=ATMOS_PORT=7777
+Restart=on-failure
+RestartSec=5
+# The server only ever reads the project directory and writes its own cache.
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

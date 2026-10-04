@@ -1,0 +1,12 @@
+[Unit]
+Description=Render the live sky as the desktop background
+After=atmos-net.service
+Requires=atmos-net.service
+
+[Service]
+Type=oneshot
+ExecStart=__PROJECT__/scripts/atmos-wallpaper
+Environment=ATMOS_PORT=7777
+# Type=oneshot inherits a 90s TimeoutStartSec; renders used to run 45-85s,
+# close enough to that ceiling that some were likely killed mid-flight.
+TimeoutStartSec=180

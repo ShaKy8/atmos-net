@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for weather alerts and incoming rain
+
+[Timer]
+OnBootSec=90sec
+OnUnitActiveSec=5min
+AccuracySec=30sec
+Persistent=false
+
+[Install]
+WantedBy=timers.target

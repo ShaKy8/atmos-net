@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en" data-q="2">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ATMOS//NET</title>
+<meta name="theme-color" content="#03050b">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>⛈</text></svg>">
+<link rel="preload" href="/assets/fonts/chakrapetch-700.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/assets/fonts/jetbrainsmono-500.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/css/fonts.css">
+<link rel="stylesheet" href="/css/core.css">
+<link rel="stylesheet" href="/css/views.css">
+<link rel="stylesheet" href="/css/mobile.css">
+</head>
+<body>
+
+<canvas id="sky"></canvas>
+
+<div id="app">
+
+  <header id="topbar">
+    <div class="brand">
+      <span class="led" id="led" data-state="load"></span>
+      <span>ATMOS<i>//</i><b>NET</b></span>
+    </div>
+
+    <button class="loc" id="locBtn" title="Change location  [/]">
+      <span class="pin">◈</span>
+      <span>
+        <span class="name" id="locName">locating…</span>
+        <span class="sub" id="locSub">— — —</span>
+      </span>
+    </button>
+
+    <nav id="nav" role="tablist">
+      <button role="tab" data-view="deck"   aria-selected="true"><kbd>1</kbd>Deck</button>
+      <button role="tab" data-view="radar"  aria-selected="false"><kbd>2</kbd>Radar</button>
+      <button role="tab" data-view="sky"    aria-selected="false"><kbd>3</kbd>Sky</button>
+      <button role="tab" data-view="air"    aria-selected="false"><kbd>4</kbd>Air</button>
+      <button role="tab" data-view="data"   aria-selected="false"><kbd>5</kbd>Data</button>
+      <button role="tab" data-view="overhead" aria-selected="false"><kbd>6</kbd>Above</button>
+    </nav>
+
+    <span class="spacer"></span>
+
+    <div class="clock">
+      <span id="clockTime">--:--:--</span>
+      <small id="clockZone">—</small>
+    </div>
+      <div class="bar-tools">
+
+      <button class="iconbtn alertbtn" id="alertBtn" data-n="0" title="Active alerts  [A]">⚠</button>
+      <button class="iconbtn" id="soundBtn" title="Ambient audio  [S]">♪</button>
+      <button class="iconbtn" id="briefBtn" title="Briefing  [B]">◧</button>
+      <button class="iconbtn" id="cfgBtn" title="Settings  [,]">⚙</button>
+      </div>
+  </header>
+
+  <main id="stage">
+    <section class="view active" id="view-deck"  data-view="deck"></section>
+    <section class="view"        id="view-radar" data-view="radar"></section>
+    <section class="view"        id="view-sky"   data-view="sky"></section>
+    <section class="view"        id="view-air"   data-view="air"></section>
+    <section class="view"        id="view-data"  data-view="data"></section>
+    <section class="view"        id="view-overhead" data-view="overhead"></section>
+  </main>
+
+  <footer id="scrub"></footer>
+</div>
+
+<!-- overlays -->
+<div id="fx" aria-hidden="true">
+  <div class="vig"></div>
+  <div class="scan"></div>
+  <div class="sweep"></div>
+  <div class="grain"></div>
+</div>
+
+<div class="modal" id="modal" hidden>
+  <div class="modal-card panel" id="modalCard"></div>
+</div>
+
+<div id="boot">
+  <div class="boot-inner">
+    <pre id="bootLog"></pre>
+  </div>
+</div>
+
+<script type="module" src="/js/main.js"></script>
+</body>
+</html>

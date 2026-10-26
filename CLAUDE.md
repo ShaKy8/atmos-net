@@ -16,7 +16,7 @@ npm run dev               # node --watch server.mjs
 systemctl --user status atmos-net     # the installed service
 ```
 
-There is no build step, bundler, linter, or test suite, and no npm dependencies (Node >= 20). Verify changes by running the server and loading the page; `?q=0`–`3` pins render quality, `#radar` etc. deep-links a view.
+There is no build step, bundler, linter, or npm dependencies (Node >= 20). Run all deterministic regressions with `node --test tests/*.test.cjs` (state reliability, modal focus, and Sky layout contracts). Also verify changes by running the server and loading the page; `?q=0`–`3` pins render quality, `#radar` etc. deep-links a view. Layout contracts supplement rather than replace rendered-browser checks.
 
 Env vars: `ATMOS_PORT`/`PORT` (7777), `ATMOS_HOST` (default `::`, dual-stack on purpose for Tailscale/iOS AAAA; use `127.0.0.1` for local-only), `ANTHROPIC_API_KEY` (optional; enables the model-written sentence in `/api/elsewhere`, otherwise it returns `{text:null}` and the page keeps its deterministic sentence).
 

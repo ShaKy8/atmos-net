@@ -27,6 +27,8 @@ export const api = {
   pollen: (lat, lon) => get('/api/pollen', { lat, lon }),
   observations: (lat, lon) => get('/api/observations', { lat, lon }),
   radar: () => get('/api/radar'),
+  /* Live tropical cyclones from NHC. Takes no input: the route ignores any query. */
+  storms: () => get('/api/storms'),
   space: () => get('/api/space'),
   aurora: () => get('/api/aurora'),
   iss: () => get('/api/iss'),

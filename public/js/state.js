@@ -14,6 +14,28 @@ import { sunPosition, moonPosition, moonIllumination, sunTimes, moonTimes, toCom
 const HOUR = 3600_000;
 const LS = 'atmos.v1';
 
+// Saved locations use lat/lon; geocoding uses latitude/longitude. Validate
+// before coercion so missing/blank coordinates never become NaN or 0,0.
+function normalizeLocation(loc, fallbackTz) {
+  if (!loc || typeof loc !== 'object') return null;
+  const latitude = loc.latitude ?? loc.lat, longitude = loc.longitude ?? loc.lon;
+  const valid = (v) => (typeof v === 'number' || (typeof v === 'string' && v.trim() !== '')) && Number.isFinite(+v);
+  if (!valid(latitude) || !valid(longitude) || Math.abs(+latitude) > 90 || Math.abs(+longitude) > 180) return null;
+  return {
+    name: loc.name, admin1: loc.admin1 || '', country: loc.country_code || loc.country || '',
+    lat: +latitude, lon: +longitude, tz: loc.timezone || loc.tz || fallbackTz,
+    elevation: loc.elevation ?? null,
+  };
+}
+
+function favoriteEntry(loc) {
+  const l = normalizeLocation(loc);
+  return l && {
+    name: l.name, admin1: l.admin1, country_code: l.country,
+    latitude: l.lat, longitude: l.lon, timezone: l.tz,
+  };
+}
+
 /* --------------------------------------------------------------- helpers */
 
 /**
@@ -118,7 +140,12 @@ function blend(a, b, f) {
   for (const k in a) {
     const av = a[k], bv = b[k];
     if (DISCRETE.has(k)) { out[k] = f < 0.5 ? av : bv; continue; }
-    if (typeof av === 'number' && typeof bv === 'number') out[k] = lerp(av, bv, f);
+    if (typeof av === 'number' && typeof bv === 'number') {
+      // Bearings wrap at north: 350 to 10 degrees passes through 0, not 180.
+      out[k] = k === 'windDir'
+        ? ((av + (((bv - av) % 360 + 540) % 360 - 180) * f) % 360 + 360) % 360
+        : lerp(av, bv, f);
+    }
     else out[k] = av ?? bv;
   }
   return out;
@@ -140,6 +167,9 @@ function sampleSeries(series, t) {
 class Store {
   constructor() {
     this.listeners = new Map();
+    this.requestId = 0;
+    this.pendingLocation = null;
+    this.pendingRemember = true;
 
     this.loc = null;
     this.tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -196,8 +226,8 @@ class Store {
   restore() {
     try {
       const s = JSON.parse(localStorage.getItem(LS) || '{}');
-      if (s.loc) this.loc = s.loc;
-      if (Array.isArray(s.favorites)) this.favorites = s.favorites;
+      if (s.loc) this.loc = normalizeLocation(s.loc, this.tz);
+      if (Array.isArray(s.favorites)) this.favorites = s.favorites.map(favoriteEntry).filter(Boolean);
       if (s.settings) Object.assign(this.settings, s.settings);
     } catch { /* first run */ }
   }
@@ -213,25 +243,19 @@ class Store {
 
   /* -- location -- */
   async setLocation(loc, { remember = true } = {}) {
-    this.loc = {
-      name: loc.name, admin1: loc.admin1 || '', country: loc.country_code || loc.country || '',
-      lat: +(loc.latitude ?? loc.lat), lon: +(loc.longitude ?? loc.lon),
-      tz: loc.timezone || this.tz, elevation: loc.elevation ?? null,
-    };
-    this.tz = this.loc.tz;
-    this.fmt = makeTimeFmt(this.tz);
-    if (remember) this.save();
-    this.emit('loc', this.loc);
+    const next = normalizeLocation(loc, this.tz);
+    if (!next) return;
+    // Keep the last coherent location + readings visible until its replacement
+    // succeeds. A failed city change must not relabel another city's weather.
+    this.pendingLocation = next;
+    this.pendingRemember = remember;
     await this.refresh({ full: true });
   }
 
   addFavorite(loc) {
-    const key = (l) => `${(+l.lat ?? +l.latitude).toFixed(3)},${(+l.lon ?? +l.longitude).toFixed(3)}`;
-    const entry = {
-      name: loc.name, admin1: loc.admin1 || '', country_code: loc.country_code || loc.country || '',
-      latitude: +(loc.latitude ?? loc.lat), longitude: +(loc.longitude ?? loc.lon),
-      timezone: loc.timezone || loc.tz,
-    };
+    const key = (l) => `${(+(l.lat ?? l.latitude)).toFixed(3)},${(+(l.lon ?? l.longitude)).toFixed(3)}`;
+    const entry = favoriteEntry(loc);
+    if (!entry) return;
     this.favorites = this.favorites.filter((f) => key(f) !== key(entry));
     this.favorites.unshift(entry);
     this.favorites = this.favorites.slice(0, 12);
@@ -247,17 +271,42 @@ class Store {
 
   /* -- data -- */
   async refresh({ full = false } = {}) {
-    if (!this.loc) return;
-    const { lat, lon } = this.loc;
+    const location = this.pendingLocation || this.loc;
+    if (!location) return;
+    const { lat, lon } = location;
+    const pending = this.pendingLocation;
+    const remember = this.pendingRemember;
+    const requestId = ++this.requestId;
+    const current = () => requestId === this.requestId;
+    full = full || !!pending;
     this.setStatus('load');
 
     try {
       const bundle = await api.bundle(lat, lon);
-      this.ingest(bundle);
-      this.setStatus(bundle.forecast?.ok ? 'ok' : 'err');
+      if (!current()) return;
+      if (!bundle.forecast?.ok || !Array.isArray(bundle.forecast.data?.hourly?.time) || !bundle.forecast.data.hourly.time.length) {
+        throw new Error(`Forecast unavailable for ${location.name || 'this location'}`);
+      }
+      // Prepare the timezone before committing either label or readings.
+      const tz = bundle.forecast.data.timezone || location.tz;
+      const fmt = makeTimeFmt(tz);
+      // Normalize into a temporary snapshot: malformed data must not leave a
+      // new city label paired with a half-ingested or unannounced forecast.
+      const next = { loc: { ...location, tz }, tz, fmt, following: this.following, cursor: this.cursor };
+      this.ingest.call(next, bundle);
+      const changed = !this.loc || this.loc.lat !== lat || this.loc.lon !== lon;
+      if (changed) {
+        this.climate = this.models = this.pollen = this.observed = this.radar = null;
+      }
+      Object.assign(this, next);
+      this.pendingLocation = null;
+      if (pending && remember) this.save();
       this.lastFetch = Date.now();
+      this.setStatus('ok');
+      if (pending) this.emit('loc', this.loc);
       this.emit('data', this);
     } catch (err) {
+      if (!current()) return;
       console.error('[store] bundle failed', err);
       this.setStatus('err');
       this.emit('error', err);
@@ -267,16 +316,20 @@ class Store {
     // Secondary feeds refresh in the background; a failure here degrades one
     // panel rather than blocking the console.
     const side = [
-      api.radar().then((r) => { this.radar = r; this.emit('radar', r); }),
-      api.pollen(lat, lon).then((p) => { this.pollen = p; this.emit('pollen', p); }),
-      api.observations(lat, lon).then((o) => { this.observed = o; this.emit('observed', o); }),
+      api.radar().then((r) => { if (current()) { this.radar = r; this.emit('radar', r); } }),
+      api.pollen(lat, lon).then((p) => { if (current()) { this.pollen = p; this.emit('pollen', p); } }),
+      api.observations(lat, lon).then((o) => { if (current()) { this.observed = o; this.emit('observed', o); } }),
     ];
     if (full || !this.climate) {
-      side.push(api.climate(lat, lon).then((c) => { this.climate = c; this.emit('climate', c); }));
-      side.push(api.models(lat, lon).then((m) => { this.models = this.reduceModels(m); this.emit('models', this.models); }));
+      side.push(api.climate(lat, lon).then((c) => { if (current()) { this.climate = c; this.emit('climate', c); } }));
     }
-    await Promise.allSettled(side);
-    this.emit('data', this);
+    if (full || !this.models) {
+      side.push(api.models(lat, lon).then((m) => { if (current()) { this.models = this.reduceModels(m); this.emit('models', this.models); } }));
+    }
+    // Not awaited: each feed re-renders its own panel when it lands, and
+    // callers (the boot above all) only need the bundle, which is in by now.
+    // Awaiting these held the boot screen for the slowest of five requests.
+    Promise.allSettled(side).then(() => { if (current()) this.emit('data', this); });
   }
 
   ingest(bundle) {
@@ -320,14 +373,17 @@ class Store {
     }
 
     const a = bundle.air?.ok ? bundle.air.data : null;
+    this.air = [];
+    this.airNow = null;
     if (a) {
       this.air = zip(a.hourly, a.utc_offset_seconds ?? 0, AQ_MAP);
       this.airNow = a.current ? Object.fromEntries(
         Object.entries(AQ_MAP).map(([k, src]) => [k, a.current[src] ?? null])) : null;
     }
 
-    this.alerts = bundle.alerts?.ok
-      ? (bundle.alerts.data.features || []).map((ft) => ({ ...ft.properties, geometry: ft.geometry }))
+    this.alerts = bundle.alerts?.ok && Array.isArray(bundle.alerts.data?.features)
+      ? bundle.alerts.data.features.filter((ft) => ft && typeof ft === 'object')
+        .map((ft) => ({ ...ft.properties, geometry: ft.geometry }))
       : [];
 
     this.space = bundle.space?.ok ? bundle.space.data : null;

@@ -16,6 +16,9 @@ import {
 import { SERIES, STATUS, INK, DIM, FAINT, alpha, mount, capBar, tag } from '../charts.js';
 import { alertColor, clamp, escapeHtml as esc } from '../lib/util.js';
 
+// Longest the loop waits on the first frame's tiles before playing anyway (s).
+const PRIME_MAX = 5;
+
 export function createRadar(root) {
   root.className = 'view radar';
   root.innerHTML = `
@@ -24,6 +27,7 @@ export function createRadar(root) {
         <canvas class="fill" id="r-map"></canvas>
         <div class="radar-hud">
           <div class="radar-stamp"><b id="r-time">—</b><span id="r-age">—</span></div>
+          <div class="radar-stamp" id="r-storm-hud" hidden><b>HURRICANE ATLAS</b><span></span></div>
           <div class="radar-legend" id="r-legend"></div>
         </div>
         <div class="radar-tools">
@@ -32,6 +36,7 @@ export function createRadar(root) {
           <button class="tl-btn sm" id="r-zout" title="Zoom out">−</button>
           <button class="tl-btn sm on" id="r-labels" title="Place labels">A</button>
           <button class="tl-btn sm on" id="r-alerts" title="Alert polygons">⚠</button>
+          <button class="tl-btn sm" id="r-storms" title="Hurricane atlas: every NHC best-track storm near you" aria-pressed="false">🌀</button>
         </div>
         <div class="radar-frames">
           <button class="tl-btn" id="r-play">❚❚</button>
@@ -40,6 +45,7 @@ export function createRadar(root) {
       </div>
 
       <div class="radar-side">
+        <div class="panel storms" id="r-stormpanel" role="region" aria-label="Hurricane atlas" hidden></div>
         <div class="panel">
           <div class="hd">COVERAGE<span class="rule"></span><span class="val" id="r-src">RAINVIEWER</span></div>
           <div class="body" id="r-cover"></div>
@@ -71,7 +77,10 @@ export function createRadar(root) {
   let frames = [];        // {time, path, kind}
   let idx = 0;
   let acc = 0;
+  let primed = false;     // the first frame's tiles have arrived (or we gave up waiting)
+  let primeWait = 0;
   let lastSideKey = '';
+  let lastSideData = null;
   let lastT = performance.now();
   let host = '';
 
@@ -81,6 +90,9 @@ export function createRadar(root) {
     onMove: () => scheduleStrip(),
   });
 
+  const frameUrl = (f) => (z, x, y) =>
+    (!f || !host ? null : `${host}${f.path}/256/${z}/${x}/${y}/4/1_1.png`);
+
   map.layers = [
     {
       name: 'base',
@@ -89,11 +101,7 @@ export function createRadar(root) {
     },
     {
       name: 'radar',
-      url: (z, x, y) => {
-        const f = frames[idx];
-        if (!f || !host) return null;
-        return `${host}${f.path}/256/${z}/${x}/${y}/4/1_1.png`;
-      },
+      url: (z, x, y) => frameUrl(frames[idx])(z, x, y),
       opacity: 0.82, blend: 'screen',
       /*
        * Measured against the live tile cache: RainViewer's public radar
@@ -144,6 +152,45 @@ export function createRadar(root) {
   });
 
   let showAlerts = true;
+
+  /*
+   * STORMS: the hurricane atlas, a mode of this view. Its code is a separate
+   * chunk, fetched the first time the button is pressed, so RADAR's own
+   * bundle does not carry it. While it is on, the radar layer and the loop
+   * stand down (the atlas has its own clock) and the footer is left alone.
+   */
+  let storms = null, stormsOn = false;
+  $('r-storms').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    stormsOn = !stormsOn;
+    btn.classList.toggle('on', stormsOn);
+    btn.setAttribute('aria-pressed', String(stormsOn));
+    root.classList.toggle('storms-mode', stormsOn);
+    if (stormsOn) {
+      store.playing = false;
+      store.emit('play', false);
+      layer('radar').enabled = false;
+      try {
+        storms ||= (await import('./storms.js')).createStorms({
+          map, panel: $('r-stormpanel'), hud: $('r-storm-hud'), root,
+        });
+      } catch (err) {
+        console.error('[radar] storms', err);
+        stormsOn = false; btn.classList.remove('on'); btn.setAttribute('aria-pressed', 'false');
+        root.classList.remove('storms-mode'); layer('radar').enabled = true;
+        return;
+      }
+      if (stormsOn) storms.enter();
+    } else {
+      storms?.exit();
+      layer('radar').enabled = true;
+      if (store.loc) map.setView(store.loc.lat, store.loc.lon, 7);
+      store.playing = true;
+      store.emit('play', true);
+      paintPlay();
+      map.invalidate();
+    }
+  });
 
   /* -------------------------------------------------------- frame strip */
 
@@ -256,8 +303,11 @@ export function createRadar(root) {
     // hour is work for nothing. Rebuild only when what they show changed.
     const f0 = store.frame();
     const key = [f0?.t, f0?.precip, f0?.cape, f0?.cloud, store.alerts.length, store.hours.length].join('|');
-    if (key === lastSideKey) return;
+    // Equal current conditions can hide a new city's alerts or changed future
+    // totals. A new committed bundle must invalidate the side panels too.
+    if (key === lastSideKey && store.raw === lastSideData) return;
     lastSideKey = key;
+    lastSideData = store.raw;
 
     /* alerts */
     const a = store.alerts;
@@ -344,16 +394,39 @@ export function createRadar(root) {
 
   /* The radar loop runs only while this view is on screen. */
   function tick(now) {
-    if (store.view !== 'radar') { lastT = now; return; }
+    if (store.view !== 'radar' || stormsOn) { lastT = now; return; }
     const dt = Math.min(0.2, (now - lastT) / 1000);
     lastT = now;
     if (store.playing && frames.length) {
+      /*
+       * Hold on the first frame until its tiles are in. The loop steps every
+       * 0.42 s and a frame's tiles take longer than that on a slow link, so
+       * playing from the start showed a different half-drawn frame every
+       * step for the first several seconds. Give up after PRIME_MAX so a
+       * tile host that is down cannot freeze the loop on one frame.
+       */
+      if (!primed) {
+        primeWait += dt;
+        if (!map.tilesSettled('radar') && primeWait < PRIME_MAX) return;
+        primed = true;
+      }
       acc += dt;
       // Hold the final frame a beat longer so the loop reads clearly.
       const hold = idx === frames.length - 1 ? 1.1 : 0.42;
       if (acc >= hold) {
+        /*
+         * Step to the next frame whose tiles are in, skipping any that are
+         * not: stepping onto a half-drawn frame is the flicker. Asking also
+         * starts the loads, so the skipped frames fill in behind the loop.
+         * With none ready, stay put and look again shortly.
+         */
+        let next = -1;
+        for (let k = 1; k <= frames.length; k++) {
+          const c = (idx + k) % frames.length;
+          if (c === idx || map.tilesSettled('radar', frameUrl(frames[c]))) { next = c; break; }
+        }
+        if (next < 0 || next === idx) { acc = hold - 0.1; return; }
         acc = 0;
-        const next = (idx + 1) % frames.length;
         // Drive the cursor, not a private index: the footer's readout and
         // playhead move with the radar, and the cursor listener above picks
         // the frame. setCursor, not scrubTo - the loop is ambient, so
@@ -378,15 +451,21 @@ export function createRadar(root) {
     map,                     // the pan/pinch surface, reachable from ATMOS.views
     update() { renderSide(); map.invalidate(); },
     onShow() {
+      primed = false; primeWait = 0; acc = 0;
       map.resize();
       strip.render();
       followCursor();
+      storms?.setVisible(true);
       // The loop is ambient: it runs while the view is up, as it always did.
-      store.playing = true;
-      store.emit('play', true);
+      // The atlas has its own clock, so it leaves the radar's loop stopped.
+      if (!stormsOn) {
+        store.playing = true;
+        store.emit('play', true);
+      }
       paintPlay();
     },
     onHide() {
+      storms?.setVisible(false);
       store.playing = false;
       store.emit('play', false);
       // The loop parked the cursor in the last two hours. If the user never

@@ -246,6 +246,9 @@ before running this anywhere public.
   server identifies itself with a contact URL in its `User-Agent`.
 - **RainViewer**: radar tiles; attribution required, see their API terms.
 - **NOAA SWPC**: space weather. Public domain.
+- **NOAA NHC (nhc.noaa.gov)**: hurricane best tracks, official forecasts, cones and
+  model runs for the STORMS atlas. Public domain; it is an unofficial display, not
+  a source for decisions, so follow the National Hurricane Center for real storms.
 - **Esri**: the Dark Gray Canvas basemap is requested from Esri's public tile
   service without a key and is subject to Esri's terms and attribution.
 - **pollen.com**: the pollen route calls an undocumented endpoint with no

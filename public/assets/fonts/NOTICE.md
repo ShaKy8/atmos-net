@@ -6,4 +6,4 @@ Version 1.1. Each licence, with its copyright holders, is alongside:
 | Files | Font | Licence |
 |-------|------|---------|
 | `chakrapetch-*.woff2` | Chakra Petch | [OFL-ChakraPetch.txt](OFL-ChakraPetch.txt) |
-| `jetbrainsmono-*.woff2` | JetBrains Mono | [OFL-JetBrainsMono.txt](OFL-JetBrainsMono.txt) |
+| `jetbrainsmono-400.woff2` | JetBrains Mono (variable, all weights) | [OFL-JetBrainsMono.txt](OFL-JetBrainsMono.txt) |

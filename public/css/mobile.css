@@ -320,6 +320,10 @@
   .oh-side { flex-direction: column !important; }
   .oh-side > *, .oh-side > .grow { flex: 0 0 auto !important; }
   .oh-row { min-height: var(--tap); }
+  .st-row { min-height: var(--tap); }
+  .st-transport .tl-btn { min-width: var(--tap); min-height: var(--tap); }
+  .st-transport input[type=range] { min-height: var(--tap); }
+  .oh-chip { min-height: var(--tap); }
   /* Six tabs instead of five: the label has to survive 320/6 = 53px. */
   nav button { font-size: .54rem; letter-spacing: .06em; }
 

@@ -12,6 +12,8 @@ import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import zlib from 'node:zlib';
+import { parseBtk, parseADeck, thinPoints, STORM_ID, stormNumber } from './atcf.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, 'public');
@@ -98,20 +100,50 @@ async function diskSet(key, data) {
   } catch { /* cache writes are best-effort */ }
 }
 
+/** How long a live-aircraft feed gets before the next one is tried. */
+const FEED_TIMEOUT_MS = 4000;
+
+/**
+ * What any other upstream gets. Without a limit one hung host held a
+ * hosted instance for the whole 25 s (a timeout, route
+ * unknown because nothing logged it). The 31-year archive is a ~400 KB
+ * body and gets longer; a request past SLOW_MS is logged by route.
+ */
+const UPSTREAM_TIMEOUT_MS = 8000;
+const ARCHIVE_TIMEOUT_MS = 20000;
+const SLOW_MS = 5000;
+const AIR_TIMEOUT_MS = 4000;
+const AIR_FAILURE_MS = 60_000;
+
+/**
+ * Parse an upstream JSON body, and when it is not JSON say what it was. A
+ * 200 whose body begins "Unexpected" once became "/api/here -> 502:
+ * Unexpected token 'U'" with nothing to say who sent it or what it said.
+ */
+class NotJSON extends Error {}
+async function jsonBody(res, url) {
+  const body = await res.text();
+  try { return JSON.parse(body); }
+  catch { throw new NotJSON(`not JSON (${res.status}) :: ${url.slice(0, 120)} :: ${JSON.stringify(body.slice(0, 100))}`); }
+}
+
 /**
  * Fetch JSON with layered caching. `disk: true` survives restarts, which is
  * what we want for the 31-year climate archive (expensive, changes yearly).
  */
-async function cachedJSON(key, ttl, url, { disk = false, text = false, mem: keep = true } = {}) {
+async function cachedJSON(key, ttl, url, { disk = false, text = false, mem: keep = true, timeout = UPSTREAM_TIMEOUT_MS } = {}) {
   const hit = memGet(key);
   if (hit) return hit;
   if (disk) {
     const d = await diskGet(key, ttl);
     if (d) { if (keep) memSet(key, d, Math.min(ttl, HOUR)); return d; }
   }
-  const res = await fetch(url, { headers: { 'User-Agent': UA, Accept: text ? 'text/plain' : 'application/json' } });
+  const res = await fetch(url, {
+    headers: { 'User-Agent': UA, Accept: text ? 'text/plain' : 'application/json' },
+    ...(timeout ? { signal: AbortSignal.timeout(timeout) } : {}),
+  });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} :: ${url.slice(0, 120)}`);
-  const data = text ? await res.text() : await res.json();
+  const data = text ? await res.text() : await jsonBody(res, url);
   if (keep) memSet(key, data, ttl);
   if (disk) await diskSet(key, data);
   return data;
@@ -136,10 +168,67 @@ function purgeLiveFeeds() {
   return true;
 }
 
-/** Wrap a fetch so one dead upstream degrades a panel instead of the page. */
+/**
+ * Wrap a fetch so one dead upstream degrades a panel instead of the page.
+ * The failure is logged by name: a bundle that lost its forecast to the
+ * deadline answered 200 and left no trace of which source it was.
+ */
 async function soft(label, fn) {
   try { return { ok: true, data: await fn() }; }
-  catch (err) { return { ok: false, error: String(err.message || err), label }; }
+  catch (err) {
+    console.warn(`[soft] ${label}: ${err.name || 'Error'}${err.message ? ` ${String(err.message).slice(0, 120)}` : ''}`);
+    return { ok: false, error: String(err.message || err), label };
+  }
+}
+
+/**
+ * NWS alerts for a point. api.weather.gov covers the US only and answers 400
+ * for anywhere else (Vancouver, say), which is "no alerts here", not a
+ * failure: left to soft() it logged a [soft] line on every such bundle.
+ * Only 400 is read that way; a 5xx or a timeout is still a failed source.
+ */
+async function alertsAt(key, lat, lon) {
+  try {
+    return await cachedJSON(`al_${key}`, 2 * MIN,
+      `https://api.weather.gov/alerts/active?point=${lat.toFixed(4)},${lon.toFixed(4)}`);
+  } catch (err) {
+    if (/^400 /.test(err.message)) return { features: [] };
+    throw err;
+  }
+}
+
+/**
+ * Air quality for a bundle. It is the least important source and the bundle
+ * waits for its slowest, so it gets half the usual deadline, and a failure is
+ * remembered for a minute: during a slow spell at Open-Meteo (October 18,
+ * 2026, three bundles at 8 s each) every request paid the full wait again,
+ * because nothing caches an error.
+ */
+async function airFor(key, lat, lon) {
+  const failed = memGet(`aqfail_${key}`);
+  if (failed) throw new Error(`air quality failed a moment ago: ${failed.why}`);
+  try {
+    return await cachedJSON(`aq_${key}`, 20 * MIN, airURL(lat, lon), { timeout: AIR_TIMEOUT_MS });
+  } catch (err) {
+    memSet(`aqfail_${key}`, { why: String(err.name || 'Error') }, AIR_FAILURE_MS);
+    throw err;
+  }
+}
+
+/**
+ * One adsbdb lookup. It answers 404 for an aircraft or callsign it does not
+ * know, which is the ordinary case for a private plane, not a failed source:
+ * left to soft() it logged a [soft] line for every such tap. The empty
+ * result has the shape of a real answer with nothing in it, so the route
+ * reads it the way it reads a miss. Anything but 404 still fails.
+ */
+async function adsbdb(key, ttl, url) {
+  try {
+    return await cachedJSON(key, ttl, url);
+  } catch (err) {
+    if (/^404 /.test(err.message)) return { response: null };
+    throw err;
+  }
 }
 
 /* ---------------------------------------------------------------- upstream */
@@ -249,7 +338,7 @@ function point(q) {
  * reserved concurrency (scripts/api-throttle.sh) the worst case is copies x
  * this per hour. The Anthropic Console spend limit is the hard backstop.
  */
-const MODEL_CALLS_PER_HOUR = 20;
+const MODEL_CALLS_PER_HOUR = 10;
 let modelBudget = { hour: 0, used: 0 };
 function spendModelCall() {
   const h = Math.floor(Date.now() / HOUR);
@@ -263,9 +352,8 @@ async function bundleFor(lat, lon) {
   const key = `${lat.toFixed(3)},${lon.toFixed(3)}`;
   const [forecast, air, alerts, space] = await Promise.all([
     soft('forecast', () => cachedJSON(`fc_${key}`, 5 * MIN, forecastURL(lat, lon))),
-    soft('air', () => cachedJSON(`aq_${key}`, 20 * MIN, airURL(lat, lon))),
-    soft('alerts', () => cachedJSON(`al_${key}`, 2 * MIN,
-      `https://api.weather.gov/alerts/active?point=${lat.toFixed(4)},${lon.toFixed(4)}`)),
+    soft('air', () => airFor(key, lat, lon)),
+    soft('alerts', () => alertsAt(key, lat, lon)),
     soft('space', () => spaceWeather()),
   ]);
   return { key, lat, lon, fetched: Date.now(), forecast, air, alerts, space };
@@ -343,6 +431,190 @@ function hudSummary(bundle) {
   return out;
 }
 
+/* ============================================================== STORMS
+ *
+ * Live tropical cyclones, from NHC. The browser cannot ask NHC itself
+ * (connect-src 'self'), and four feeds have to be read and combined:
+ *
+ *   CurrentStorms.json   which storms are active right now (often none)
+ *   b-deck               each one's best track so far, with wind radii
+ *   a-deck               NHC's official forecast (OFCL) and five models' runs
+ *                        (AVNO EMXI HFSA HFSB CTCX), parsed here: the file is
+ *                        ~800 KB gzipped and holds every model's every run
+ *   ArcGIS cone          the forecast cone, as GeoJSON polygons
+ *
+ * This is life-safety data, so the failure modes are chosen on purpose:
+ *   - The route takes NO input. Nothing a caller sends reaches an upstream
+ *     URL, and every id that does is checked against a pattern first, so a
+ *     public route cannot be steered at NHC or made to fetch anything else.
+ *   - Whether anything is active is the one fact that must never be guessed.
+ *     If CurrentStorms.json cannot be read the route THROWS (502, never
+ *     cached), so "could not check" can never look like "no storms".
+ *   - One missing part (no forecast yet, no cone) does not drop the storm:
+ *     it is answered with that part marked in `parts` as 'none' (not there)
+ *     or 'fail' (could not be read), and a response with a failed part is
+ *     cached for seconds, not minutes.
+ */
+const NHC_CURRENT = 'https://www.nhc.noaa.gov/CurrentStorms.json';
+const NHC_BTK = 'https://ftp.nhc.noaa.gov/atcf/btk/';
+const NHC_ADECK = 'https://ftp.nhc.noaa.gov/atcf/aid_public/';
+const NHC_ARCGIS = 'https://mapservices.weather.noaa.gov/tropical/rest/services/tropical/NHC_tropical_weather/MapServer';
+const STORMS_MAX = 5;
+const BEST_FIXES_MAX = 120;
+const ADECK_GZ_MAX = 3 * 1024 * 1024;
+const ADECK_RAW_MAX = 25 * 1024 * 1024;
+const CONE_MAX_BYTES = 200 * 1024;
+
+/** The scalars of one CurrentStorms.json entry that pass their checks, or null for a non-cyclone. */
+function shapeStorm(e) {
+  const id = String((e && e.id) ?? '').toLowerCase();
+  if (!STORM_ID.test(id) || stormNumber(id) >= 90) return null;
+  const n = (v, lo, hi) => { const x = Number(v); return v != null && v !== '' && Number.isFinite(x) && x >= lo && x <= hi ? x : null; };
+  const adv = (e && e.publicAdvisory) || {};
+  const updated = Date.parse(e.lastUpdate);
+  return {
+    id,
+    bin: /^(AT|EP|CP)\d$/.test(String(e.binNumber ?? '')) ? e.binNumber : null,
+    name: /^[A-Za-z0-9 .'-]{1,40}$/.test(String(e.name ?? '')) ? String(e.name) : '',
+    classification: /^[A-Z]{2,4}$/.test(String(e.classification ?? '')) ? e.classification : null,
+    windKt: n(e.intensity, 0, 250),
+    presMb: n(e.pressure, 800, 1100),
+    lat: n(e.latitudeNumeric, -90, 90),
+    lon: n(e.longitudeNumeric, -180, 180),
+    moveDir: n(e.movementDir, 0, 360),
+    moveKt: n(e.movementSpeed, 0, 100),
+    updated: Number.isFinite(updated) ? new Date(updated).toISOString() : null,
+    advisory: {
+      num: /^[0-9A-Za-z]{1,6}$/.test(String(adv.advNum ?? '')) ? adv.advNum : null,
+      // Only NHC's own pages: this is rendered as a link.
+      url: typeof adv.url === 'string' && adv.url.length < 200 && adv.url.startsWith('https://www.nhc.noaa.gov/') ? adv.url : null,
+    },
+  };
+}
+
+async function stormBest(id) {
+  let text;
+  try { text = await cachedJSON(`st_btk_${id}`, 10 * MIN, `${NHC_BTK}b${id}.dat`, { text: true }); }
+  catch (err) {
+    // NHC lists a storm minutes before it publishes its files: a 404 is "not there yet", not a failed read.
+    if (/^404 /.test(err.message)) return [];
+    throw err;
+  }
+  return parseBtk(text).fixes.slice(-BEST_FIXES_MAX).map((f) => ({
+    t: f.t, lat: f.lat, lon: f.lon, wind: f.wind, pres: f.pres, status: f.status, r: f.r || null,
+  }));
+}
+
+/**
+ * The model guidance drawn beside the official forecast, in the order shown.
+ * Each is one model's own run: AVNO is the GFS, EMXI the ECMWF, HFSA and HFSB
+ * the two HAFS runs, CTCX the Navy's COAMPS-TC.
+ */
+const STORM_MODELS = ['AVNO', 'EMXI', 'HFSA', 'HFSB', 'CTCX'];
+
+/**
+ * NHC's official forecast and the model guidance for a storm, from one read of
+ * the a-deck: { forecast, models }. `forecast` is { cycle, points } or null
+ * when NHC has none yet; `models` maps a model name to { cycle, points } for
+ * each of STORM_MODELS that has a run (each at its own latest cycle, which can
+ * be older than the official forecast's), thinned to every 12 h out to 120 h
+ * and cut to what a line needs: no pressure, status or radii.
+ */
+async function stormForecast(id) {
+  const key = `st_fc_${id}`;
+  const hit = memGet(key);
+  if (hit) return hit.v;
+  const res = await fetch(`${NHC_ADECK}a${id}.dat.gz`, {
+    headers: { 'User-Agent': UA },
+    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+  });
+  // Not memoised: the file appears minutes after NHC lists the storm, and the next read should find it.
+  if (res.status === 404) return { forecast: null, models: {} };
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText} :: a-deck ${id}`);
+  if (Number(res.headers.get('content-length')) > ADECK_GZ_MAX) throw new Error(`a-deck ${id} is too large`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length > ADECK_GZ_MAX) throw new Error(`a-deck ${id} is too large`);
+  // Served as a file, so the bytes are gzip; if a proxy already inflated them, they are text.
+  const raw = buf[0] === 0x1f && buf[1] === 0x8b ? zlib.gunzipSync(buf, { maxOutputLength: ADECK_RAW_MAX }) : buf;
+  const found = parseADeck(raw.toString('latin1'), ['OFCL', ...STORM_MODELS]);
+  const { OFCL } = found;
+  const models = {};
+  for (const name of STORM_MODELS) {
+    const run = found[name];
+    if (!run) continue;
+    const points = thinPoints(run.points).map((p) => ({ tau: p.tau, t: p.t, lat: p.lat, lon: p.lon, wind: p.wind }));
+    if (points.length > 1) models[name] = { cycle: new Date(run.cycle).toISOString(), points };
+  }
+  const v = {
+    forecast: OFCL ? {
+      cycle: new Date(OFCL.cycle).toISOString(),
+      points: OFCL.points.map((p) => ({ tau: p.tau, t: p.t, lat: p.lat, lon: p.lon, wind: p.wind, pres: p.pres, status: p.status, r: p.r || null })),
+    } : null,
+    models,
+  };
+  memSet(key, { v }, 10 * MIN);
+  return v;
+}
+
+/** The forecast cone for a bin number ('AT1', 'EP2'...), as GeoJSON, or null when there is none. */
+async function stormCone(bin) {
+  let layers = memGet('st_layers');
+  if (!layers) {
+    const svc = await cachedJSON('st_svc', 6 * HOUR, `${NHC_ARCGIS}?f=json`, { mem: false });
+    layers = Object.fromEntries((Array.isArray(svc && svc.layers) ? svc.layers : [])
+      .filter((l) => Number.isInteger(l.id) && typeof l.name === 'string').map((l) => [l.name, l.id]));
+    memSet('st_layers', layers, 6 * HOUR);
+  }
+  const id = layers[`${bin} Forecast Cone`];
+  if (!Number.isInteger(id)) throw new Error(`no cone layer for ${bin}`);
+  const gj = await cachedJSON(`st_cone_${bin}`, 5 * MIN,
+    `${NHC_ARCGIS}/${id}/query?where=1%3D1&outFields=*&geometryPrecision=2&f=geojson`);
+  const features = (Array.isArray(gj && gj.features) ? gj.features : [])
+    .filter((f) => f && f.geometry && /^(Multi)?Polygon$/.test(f.geometry.type) && Array.isArray(f.geometry.coordinates))
+    .slice(0, 4)
+    .map((f) => ({ type: 'Feature', properties: {}, geometry: { type: f.geometry.type, coordinates: f.geometry.coordinates } }));
+  if (!features.length) return null;
+  const out = { type: 'FeatureCollection', features };
+  if (JSON.stringify(out).length > CONE_MAX_BYTES) throw new Error(`cone for ${bin} is too large`);
+  return out;
+}
+
+/** { body, partial }: partial when any part of any storm could not be read. */
+async function stormsPayload() {
+  const hit = memGet('storms_payload');
+  if (hit) return hit;
+  const cur = await cachedJSON('st_cur', 3 * MIN, NHC_CURRENT);
+  if (!cur || !Array.isArray(cur.activeStorms)) throw new Error('CurrentStorms.json has no activeStorms list');
+  const active = cur.activeStorms.map(shapeStorm).filter(Boolean);
+  const storms = await Promise.all(active.slice(0, STORMS_MAX).map(async (s) => {
+    const [best, fcst, cone] = await Promise.all([
+      soft(`storm best ${s.id}`, () => stormBest(s.id)),
+      soft(`storm fcst ${s.id}`, () => stormForecast(s.id)),
+      s.bin ? soft(`storm cone ${s.id}`, () => stormCone(s.bin)) : { ok: true, data: null },
+    ]);
+    const part = (r) => (!r.ok ? 'fail' : r.data == null || (Array.isArray(r.data) && !r.data.length) ? 'none' : 'ok');
+    const fc = fcst.ok ? fcst.data : null;
+    const models = fc ? fc.models : {};
+    return {
+      ...s,
+      best: best.ok ? best.data : [],
+      forecast: fc ? fc.forecast : null,
+      models,
+      cone: cone.ok ? cone.data : null,
+      // One read of the a-deck gives both: if it failed, both did.
+      parts: { best: part(best), forecast: !fcst.ok ? 'fail' : fc.forecast ? 'ok' : 'none', models: !fcst.ok ? 'fail' : Object.keys(models).length ? 'ok' : 'none', cone: part(cone) },
+    };
+  }));
+  const out = {
+    body: { source: 'NHC', checked: new Date().toISOString(), activeCount: active.length, storms },
+    partial: storms.some((s) => Object.values(s.parts).includes('fail')),
+  };
+  memSet('storms_payload', out, out.partial ? 30_000 : 3 * MIN);
+  return out;
+}
+
+/* ============================================================ /STORMS */
+
 const routes = {
 
   async '/api/config'() {
@@ -384,7 +656,7 @@ const routes = {
     const key = `cl_${lat.toFixed(2)},${lon.toFixed(2)}`;
     const hit = memGet(key + '_reduced');
     if (hit) return hit;
-    const raw = await cachedJSON(key, 30 * DAY, climateURL(lat, lon), { disk: true, mem: false });
+    const raw = await cachedJSON(key, 30 * DAY, climateURL(lat, lon), { disk: true, mem: false, timeout: ARCHIVE_TIMEOUT_MS });
     const reduced = reduceClimate(raw);
     memSet(key + '_reduced', reduced, 12 * HOUR);
     return reduced;
@@ -432,6 +704,9 @@ const routes = {
           Referer: `https://www.pollen.com/forecast/${kind}/pollen/${zip}`,
           'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64)',
         },
+        // Not through cachedJSON, so it needs its own: a hung pollen.com
+        // would otherwise hold a hosted instance until the platform's limit.
+        signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
       });
       if (!res.ok) throw new Error(`pollen.com ${res.status}`);
       return res.json();
@@ -473,8 +748,17 @@ const routes = {
     if (hit) return hit;
 
     // The station list for a point is stable; the observations are not.
-    const stations = await cachedJSON(`stn_${lat.toFixed(3)},${lon.toFixed(3)}`, 7 * DAY,
-      `https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}/stations`, { disk: true });
+    // weather.gov answers 404 for a point outside the US and has answered 403 to
+    // a cloud-hosted address now and then; neither is a fault of ours, so both read as
+    // "no station here" rather than a 502. Anything else still throws.
+    let stations;
+    try {
+      stations = await cachedJSON(`stn_${lat.toFixed(3)},${lon.toFixed(3)}`, 7 * DAY,
+        `https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}/stations`, { disk: true });
+    } catch (err) {
+      if (/^40[34] /.test(err.message)) return { station: null, reason: 'weather.gov has no station list for this point' };
+      throw err;
+    }
 
     const near = (stations.features || [])
       .map((f) => ({
@@ -540,6 +824,16 @@ const routes = {
     }
     memSet(key, out, 10 * MIN);
     return out;
+  },
+
+  /*
+   * Live tropical cyclones (see STORMS above): none, most of the year. No
+   * input; a failure to ask NHC at all is a 502 so it can never read as
+   * "no storms". The edge keeps it three minutes and never serves it stale:
+   * this is the one answer here where an hour-old copy could mislead.
+   */
+  async '/api/storms'() {
+    return (await stormsPayload()).body;
   },
 
   /*
@@ -715,15 +1009,26 @@ const routes = {
       ['adsb.lol', `https://api.adsb.lol/v2/lat/${lat}/lon/${lon}/dist/${nm}`],
       ['adsb.fi', `https://opendata.adsb.fi/api/v2/lat/${lat}/lon/${lon}/dist/${nm}`],
     ];
-    let raw = null, source = null;
-    for (const [host, url] of feeds) {
-      const r = await soft('feed', () => cachedJSON(`${key}_${host}`, 10_000, url));
-      if (r.ok && Array.isArray(r.data?.ac)) { raw = r.data; source = host; break; }
-    }
-    if (!raw) return { source: null, at: Date.now(), centre: [lat, lon], radiusNm: nm, aircraft: [] };
+    /*
+     * Both feeds are asked at once and the first good answer wins. adsb.lol
+     * names the list `ac`, adsb.fi `aircraft`; the records inside are the same.
+     * Asking in turn made a dead host cost its whole timeout on every edge
+     * miss: adsb.lol hung once, and each miss took ~11 s, then 4 s, then 2 s
+     * with the timeout shortened. The price is two upstream requests per miss
+     * instead of one - still one pair per ten seconds per neighbourhood.
+     */
+    const attempts = feeds.map(async ([host, url]) => {
+      const r = await soft('feed', () => cachedJSON(`${key}_${host}`, 10_000, url, { timeout: FEED_TIMEOUT_MS }));
+      const ac = r.ok ? (r.data?.ac ?? r.data?.aircraft) : null;
+      if (!Array.isArray(ac)) throw new Error(`${host}: no aircraft list`);
+      return { list: ac, source: host };
+    });
+    const won = await Promise.any(attempts).catch(() => null);
+    if (!won) return { source: null, at: Date.now(), centre: [lat, lon], radiusNm: nm, aircraft: [] };
+    const { list, source } = won;
 
     const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-    const aircraft = raw.ac
+    const aircraft = list
       .filter((a) => Number.isFinite(a.lat) && Number.isFinite(a.lon))
       .map((a) => ({
         hex: a.hex || null,
@@ -765,9 +1070,9 @@ const routes = {
       const e = new Error('cs or hex is required'); e.status = 400; throw e;
     }
     const [route, frame] = await Promise.all([
-      okCs ? soft('route', () => cachedJSON(`fr_${cs}`, HOUR,
+      okCs ? soft('route', () => adsbdb(`fr_${cs}`, HOUR,
         `https://api.adsbdb.com/v0/callsign/${cs}`)) : { ok: false },
-      okHex ? soft('frame', () => cachedJSON(`af_${hex}`, DAY,
+      okHex ? soft('frame', () => adsbdb(`af_${hex}`, DAY,
         `https://api.adsbdb.com/v0/aircraft/${hex}`)) : { ok: false },
     ]);
     const fr = route.ok ? route.data?.response?.flightroute : null;
@@ -793,13 +1098,15 @@ const routes = {
     };
   },
 
+  /*
+   * The position only. A CelesTrak TLE used to ride along; nothing read it
+   * (both views use `pos`), and its timeouts held this route for the full
+   * 8 s deadline (October 18, 2026). Production's satellites panel gets its
+   * elements from a snapshot of our own, which is how CelesTrak asks to be used.
+   */
   async '/api/iss'() {
-    const [pos, tle] = await Promise.all([
-      soft('pos', () => cachedJSON('iss_pos', 10_000, 'https://api.wheretheiss.at/v1/satellites/25544')),
-      soft('tle', () => cachedJSON('iss_tle', 6 * HOUR,
-        'https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=TLE', { text: true })),
-    ]);
-    return { pos, tle };
+    const pos = await soft('pos', () => cachedJSON('iss_pos', 10_000, 'https://api.wheretheiss.at/v1/satellites/25544'));
+    return { pos };
   },
 };
 
@@ -915,6 +1222,12 @@ const MIME = {
   '.woff2': 'font/woff2', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json',
 };
 
+/** Say which route a slow request was: nothing else records it. */
+function slowNote(route, t0) {
+  const ms = Date.now() - t0;
+  if (ms > SLOW_MS) console.warn(`[slow] ${route} ${ms} ms`);
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = decodeURIComponent(url.pathname);
@@ -927,13 +1240,16 @@ const server = http.createServer(async (req, res) => {
      * A wildcard would let any page the user happens to open read them —
      * turning a blind request into readable home coordinates.
      */
+    const t0 = Date.now();
     try {
       if (url.searchParams.get('fresh') === '1') purgeLiveFeeds();
       const body = await routes[pathname](url.searchParams);
+      slowNote(pathname, t0);
       send(res, 200, JSON.stringify(body), 'application/json; charset=utf-8');
     } catch (err) {
       const status = err.status || 502;
       console.error(`[api] ${pathname} -> ${status}: ${err.message}`);
+      slowNote(pathname, t0);
       send(res, status, JSON.stringify({ error: err.message }), 'application/json; charset=utf-8');
     }
     return;

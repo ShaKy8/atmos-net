@@ -21,6 +21,7 @@ import { createData } from './views/data.js';
 import { createOverhead } from './views/overhead.js';
 import { initAudio, setAudioEnabled, updateAudio, isAudioOn } from './audio.js';
 import { showBriefing } from './brief.js';
+import { createModalController } from './lib/modal.js';
 
 const VIEWS = ['deck', 'radar', 'sky', 'air', 'data', 'overhead'];
 const REFRESH_MS = 5 * 60_000;
@@ -48,6 +49,7 @@ const el = {
 const sky = new Sky(el.sky);
 let timeline = null;
 const views = {};
+const modal = createModalController(el.modal, el.modalCard, document.getElementById('app'));
 
 /* ------------------------------------------------------------------ boot */
 
@@ -107,7 +109,7 @@ async function start() {
     // Snap the sky to the current moment so it doesn't ease in from nothing.
     const p = store.skyParams();
     if (p) sky.snap(p);
-  }, 480);
+  }, 0);
 
   loop();
   setInterval(() => { if (!document.hidden) store.refresh(); }, REFRESH_MS);
@@ -117,15 +119,35 @@ async function start() {
 
 /* -------------------------------------------------------------- mount UI */
 
+/*
+ * A view nobody has opened is not built. RADAR and OVERHEAD each own a map,
+ * and building them at boot fetched ~70 tiles that shared the link with the
+ * data feeds: the last of those landed ~0.9 s later on a slow connection, and
+ * everyone who never opens either view paid for it. The property is a getter
+ * that builds on first read and then turns into the plain value, so
+ * views[name], setView() and window.ATMOS.views all read it the same way.
+ */
+function lazyView(name, make, id) {
+  Object.defineProperty(views, name, {
+    configurable: true,
+    enumerable: true,
+    get() {
+      const v = make(document.getElementById(id));
+      Object.defineProperty(views, name, { value: v, configurable: true, enumerable: true, writable: true });
+      return v;
+    },
+  });
+}
+
 function mountUI() {
   timeline = createTimeline(el.scrub);
 
   views.deck = createDeck(document.getElementById('view-deck'));
-  views.radar = createRadar(document.getElementById('view-radar'));
   views.sky = createSkyView(document.getElementById('view-sky'));
   views.air = createAir(document.getElementById('view-air'));
   views.data = createData(document.getElementById('view-data'));
-  views.overhead = createOverhead(document.getElementById('view-overhead'));
+  lazyView('radar', createRadar, 'view-radar');
+  lazyView('overhead', createOverhead, 'view-overhead');
 
   const rerender = () => {
     const v = views[store.view];
@@ -152,8 +174,6 @@ function mountUI() {
   el.briefBtn.addEventListener('click', () => showBriefing(store, openModal));
   el.cfgBtn.addEventListener('click', openSettings);
   el.soundBtn.addEventListener('click', toggleSound);
-
-  el.modal.addEventListener('click', (e) => { if (e.target === el.modal) closeModal(); });
 
   // A laptop lid re-opened after hours should show now, not then.
   document.addEventListener('visibilitychange', () => {
@@ -192,6 +212,9 @@ function setView(v, { push = true } = {}) {
   store.view = v;
   // A readout tapped onto a chart belongs to the view you were looking at.
   clearInspect();
+  // Built before the tabs are toggled: a view's constructor sets its root's
+  // className, which would wipe the 'active' this function is about to add.
+  const view = views[v];
   // Deep-linkable: reload or bookmark lands on the same view.
   if (push && location.hash.slice(1) !== v) history.replaceState(null, '', '#' + v);
   for (const b of el.nav.querySelectorAll('button')) {
@@ -202,7 +225,6 @@ function setView(v, { push = true } = {}) {
   }
   // The deck lets the sky through; data-dense views dim it for legibility.
   document.documentElement.style.setProperty('--stage-dim', v === 'deck' ? '0.25' : '0.72');
-  const view = views[v];
   if (view?.update) view.update();
   if (view?.onShow) view.onShow();
 }
@@ -258,14 +280,11 @@ function tickClock(now) {
 
 /* ----------------------------------------------------------------- modal */
 
-export function openModal(html, onMount) {
-  el.modalCard.innerHTML = html;
-  el.modal.hidden = false;
-  if (onMount) onMount(el.modalCard);
+export function openModal(html, onMount, trigger) {
+  modal.open(html, onMount, trigger);
 }
 export function closeModal() {
-  el.modal.hidden = true;
-  el.modalCard.innerHTML = '';
+  modal.close();
 }
 
 /* -------------------------------------------------------------- search UI */
@@ -421,7 +440,7 @@ function openAlerts() {
   `);
 }
 
-function openSettings() {
+function openSettings(event) {
   const q = perf.manual;
   openModal(`
     <div class="hd">SETTINGS<span class="rule"></span><span class="val">ATMOS//NET v1.0.0</span></div>
@@ -471,7 +490,7 @@ function openSettings() {
       e.target.textContent = store.settings.voice ? 'on' : 'off';
       e.target.classList.toggle('on', store.settings.voice);
     });
-  });
+  }, event?.currentTarget);
 }
 
 function toggleSound() {
@@ -538,12 +557,15 @@ function maybeGeolocate(cfg) {
 /* -------------------------------------------------------------- keyboard */
 
 function onKey(e) {
-  // Never hijack typing.
-  if (e.target.matches('input, textarea, [contenteditable]')) {
-    if (e.key === 'Escape') { closeModal(); e.target.blur(); }
+  // Leave native control activation, editing and nested control content alone.
+  if (e.defaultPrevented || e.isComposing) return;
+  if (e.target.closest?.('input, textarea, select, button, a[href], summary, [contenteditable], [role="button"], [role="link"], [role="slider"], [role="textbox"], [role="combobox"]')) {
+    if (e.key === 'Escape') closeModal();
     return;
   }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
+  // A non-interactive dialog (for example empty Alerts) owns focus too.
+  if (e.target.closest?.('[aria-modal="true"]')) return;
 
   const k = e.key;
   if (k === 'Escape') { closeModal(); return; }

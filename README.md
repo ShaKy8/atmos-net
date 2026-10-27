@@ -1,5 +1,7 @@
 # ATMOS//NET
 
+[![Tests](https://github.com/ShaKy8/atmos-net/actions/workflows/test.yml/badge.svg)](https://github.com/ShaKy8/atmos-net/actions/workflows/test.yml)
+
 A cyberpunk weather console for one machine. Fullscreen web portal, live WebGL
 sky, five views, and a time scrubber that moves the entire interface — including
 the sky — through the forecast.

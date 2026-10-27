@@ -3,6 +3,7 @@
 [![Tests](https://github.com/ShaKy8/atmos-net/actions/workflows/test.yml/badge.svg)](https://github.com/ShaKy8/atmos-net/actions/workflows/test.yml)
 [![Node >= 20](https://img.shields.io/badge/node-%3E%3D20-339933?logo=nodedotjs&logoColor=white)](package.json)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Last commit](https://img.shields.io/github/last-commit/ShaKy8/atmos-net)](https://github.com/ShaKy8/atmos-net/commits/main)
 
 A cyberpunk weather console for one machine. Fullscreen web portal, live WebGL
 sky, five views, and a time scrubber that moves the entire interface — including

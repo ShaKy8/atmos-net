@@ -690,7 +690,8 @@ const routes = {
       const { lat, lon } = point(q);
       const rev = await soft('rev', () => cachedJSON(`rv_${lat.toFixed(3)},${lon.toFixed(3)}`, DAY,
         `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`));
-      zip = rev.ok ? rev.data.postcode : null;
+      // The geocoder's postcode goes into the same URL path, so it gets the same check.
+      zip = rev.ok && /^\d{5}$/.test(rev.data.postcode) ? rev.data.postcode : null;
       if (rev.ok && rev.data.countryCode !== 'US') return { source: 'none', reason: 'outside US coverage' };
     }
     if (!zip) return { source: 'none', reason: 'no postal code for this point' };

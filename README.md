@@ -148,7 +148,7 @@ The installer backs up every file it touches and:
 - runs the server as a **systemd user service** (`atmos-net.service`), started on login
 - binds **`SUPER` + `SHIFT` + `W`** to open the portal fullscreen
   *(`SUPER`+`W` is Omarchy's "close window" and is deliberately left alone)*
-- sets the **desktop background to the live sky**, re-rendered every 20 minutes
+- sets the **desktop background to the live sky**, re-rendered every 5 minutes
   from the same shader at your monitor's resolution, into
   `~/.local/state/atmos-net/wallpaper/`
 - sends **desktop notifications** for severe weather and rain starting within
@@ -180,6 +180,27 @@ readout (CPU, memory, storage, tasks, network traffic) over this wallpaper and r
 `/api/hud` for alerts, rain and AQI. It lines up with the wallpaper's readout, so
 keep to the layout contract in the comment at the top of `public/wallpaper.html`
 if you change that block.
+
+### Checking it
+
+After a reboot, or whenever the background looks wrong:
+
+```bash
+./scripts/atmos-check
+```
+
+It prints one `PASS`, `WARN` or `FAIL` line per check and exits 1 if anything
+failed: the wallpaper path, timer and server units; that the background link
+points at `sky-a.png` or `sky-b.png`; that the latest render succeeded on the
+GPU; that the wallpaper guard (`atmos-wallpaper.path`, which puts the sky back
+when a theme change or Omarchy's background switcher replaces it) has run
+without failures; and that no user units have failed. It also checks the
+SYS//NET companion HUD (running, no quickshell core dumps since boot). Set
+`ATMOS_SKIP_HUD=1` to skip those two checks if you do not use it.
+
+For the first four minutes after boot a missing first render or a stock
+background is a `WARN`, not a `FAIL`, because the first render lands three
+minutes in.
 
 ## Layout
 

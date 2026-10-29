@@ -1,0 +1,8 @@
+[Unit]
+Description=Restore the ATMOS//NET live wallpaper if something replaced it
+# A burst of triggers is normal; don't let the start limit disable the path unit.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=__PROJECT__/scripts/atmos-wallpaper-guard

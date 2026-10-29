@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+#
+# Put the live sky back when something else repoints the background link
+# (Background switcher, `omarchy theme bg next`, a theme change). Run by
+# atmos-wallpaper.path. Reuses the newest render instead of re-rendering, and
+# does nothing when the link is already a sky render, so the change made by
+# omarchy-theme-bg-set below cannot retrigger it in a loop.
+set -euo pipefail
+
+# Debounce: one theme change touches the watched directory several times. The
+# path unit queues further triggers while this runs, so a burst collapses into
+# one pass here (plus a no-op) and lets the theme finish writing its background.
+sleep 2
+
+SKY_DIR="${HOME}/.local/state/atmos-net/wallpaper"
+LINK="${HOME}/.local/state/omarchy/current/background"
+
+case "$(readlink -f "${LINK}" 2>/dev/null || true)" in
+  "${SKY_DIR}"/sky-*.png) exit 0 ;;
+esac
+
+NEWEST="$(ls -t "${SKY_DIR}"/sky-*.png 2>/dev/null | head -1 || true)"
+[ -n "${NEWEST}" ] || exit 0
+
+omarchy-theme-bg-set "${NEWEST}" >/dev/null 2>&1 || true

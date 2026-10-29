@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch the Omarchy background link
+
+[Path]
+# The link is replaced by rename (ln -nsf), so watch its directory.
+PathChanged=%h/.local/state/omarchy/current
+Unit=atmos-wallpaper-guard.service
+
+[Install]
+WantedBy=default.target

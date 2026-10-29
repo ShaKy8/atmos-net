@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+#
+# Health check for the ATMOS//NET desktop integration, meant for after a reboot.
+# One PASS / WARN / FAIL line per check; exits 1 if anything failed.
+#
+#   atmos-check                 run every check
+#   ATMOS_SKIP_HUD=1 atmos-check   skip the SYS//NET companion HUD checks
+#
+# WARN is for things that are expected for a few minutes after boot (the first
+# render is due 3 minutes in) or that degrade rather than break (CPU rendering).
+set -uo pipefail
+
+LINK="${HOME}/.local/state/omarchy/current/background"
+SKY_DIR="${HOME}/.local/state/atmos-net/wallpaper"
+UP_SECS="$(cut -d. -f1 /proc/uptime)"
+BOOT_GRACE=240   # the wallpaper timer first fires 3 min after boot
+
+pass=0; warn=0; fail=0
+if [ -t 1 ]; then G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; Z=$'\033[0m'; else G=; Y=; R=; Z=; fi
+PASS() { pass=$((pass + 1)); printf '%sPASS%s  %s\n' "${G}" "${Z}" "$*"; }
+WARN() { warn=$((warn + 1)); printf '%sWARN%s  %s\n' "${Y}" "${Z}" "$*"; }
+FAIL() { fail=$((fail + 1)); printf '%sFAIL%s  %s\n' "${R}" "${Z}" "$*"; }
+
+# ------------------------------------------------------------------- units
+for u in atmos-wallpaper.path atmos-wallpaper.timer atmos-net.service; do
+  active="$(systemctl --user is-active "${u}" 2>/dev/null || true)"
+  enabled="$(systemctl --user is-enabled "${u}" 2>/dev/null || true)"
+  if [ "${active}" = "active" ] && [ "${enabled}" = "enabled" ]; then
+    PASS "unit ${u}: active, enabled"
+  else
+    FAIL "unit ${u}: ${active:-unknown}, ${enabled:-unknown}"
+  fi
+done
+
+# --------------------------------------------------------------- sky symlink
+target="$(readlink -f "${LINK}" 2>/dev/null || true)"
+case "${target}" in
+  "${SKY_DIR}"/sky-a.png|"${SKY_DIR}"/sky-b.png)
+    if [ -f "${target}" ]; then
+      PASS "background link: $(basename "${target}")"
+    else
+      FAIL "background link points at a missing file: ${target}"
+    fi ;;
+  *)
+    if [ "${UP_SECS}" -lt "${BOOT_GRACE}" ]; then
+      WARN "background link is ${target:-unset}; the sky arrives with the first render (up ${UP_SECS}s)"
+    else
+      FAIL "background link is ${target:-unset}, not a sky render"
+    fi ;;
+esac
+
+# ------------------------------------------------------------ latest render
+render_log="$(journalctl --user -u atmos-wallpaper -b --no-pager 2>/dev/null || true)"
+last_render="$(printf '%s\n' "${render_log}" | grep -E 'atmos-wallpaper: ' | tail -1 | sed 's/.*atmos-wallpaper\[[0-9]*\]: //' || true)"
+if printf '%s\n' "${render_log}" | grep -qE 'render produced no usable image|server not reachable'; then
+  FAIL "render: $(printf '%s\n' "${render_log}" | grep -E 'render produced no usable image|server not reachable' | tail -1 | sed 's/.*atmos-wallpaper\[[0-9]*\]: //')"
+elif [ -z "${last_render}" ]; then
+  if [ "${UP_SECS}" -lt "${BOOT_GRACE}" ]; then
+    WARN "render: none yet (first one is due 3 min after boot, up ${UP_SECS}s)"
+  else
+    FAIL "render: no atmos-wallpaper output this boot"
+  fi
+elif printf '%s' "${last_render}" | grep -q swiftshader; then
+  WARN "render: ${last_render} (GPU render failed, fell back to CPU)"
+else
+  PASS "render: ${last_render}"
+fi
+
+# --------------------------------------------------------------- SYS//NET HUD
+if [ "${ATMOS_SKIP_HUD:-0}" = "1" ]; then
+  WARN "SYS//NET: skipped (ATMOS_SKIP_HUD=1)"
+else
+  hud_pid="$(pgrep -f 'quickshell.* -p [^ ]*/sysnet$' | head -1 || true)"
+  sampler_pid="$(pgrep -x sysnetd | head -1 || true)"
+  if [ -n "${hud_pid}" ] && [ -n "${sampler_pid}" ]; then
+    PASS "SYS//NET: HUD running (pid ${hud_pid}), sampler running (pid ${sampler_pid})"
+  elif [ -n "${hud_pid}" ]; then
+    FAIL "SYS//NET: HUD running but the sysnetd sampler is not"
+  else
+    FAIL "SYS//NET: HUD is not running"
+  fi
+  cores="$(coredumpctl list --no-legend --since "$(uptime -s)" 2>/dev/null | grep -c '/usr/bin/quickshell' || true)"
+  if [ "${cores:-0}" -gt 0 ]; then
+    FAIL "SYS//NET: ${cores} quickshell core dump(s) since boot (coredumpctl list)"
+  else
+    PASS "SYS//NET: no quickshell core dumps since boot"
+  fi
+fi
+
+# ------------------------------------------------------------ guard journal
+guard_log="$(journalctl --user -u atmos-wallpaper-guard -b --no-pager 2>/dev/null || true)"
+guard_runs="$(printf '%s\n' "${guard_log}" | grep -c 'Starting' || true)"
+guard_failed="$(printf '%s\n' "${guard_log}" | grep -ciE 'failed|error' || true)"
+guard_result="$(systemctl --user show atmos-wallpaper-guard.service -p Result --value 2>/dev/null || true)"
+if [ "${guard_failed:-0}" -gt 0 ] || { [ -n "${guard_result}" ] && [ "${guard_result}" != "success" ]; }; then
+  FAIL "guard: ${guard_runs} run(s), failures logged (result ${guard_result:-unknown}); journalctl --user -u atmos-wallpaper-guard -b"
+elif [ "${guard_runs:-0}" -gt 25 ]; then
+  WARN "guard: ${guard_runs} runs this boot; something may keep replacing the background"
+else
+  PASS "guard: ${guard_runs} run(s) this boot, none failed"
+fi
+
+# ------------------------------------------------------------- failed units
+failed_units="$(systemctl --user --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | paste -sd' ' - || true)"
+if [ -z "${failed_units}" ]; then
+  PASS "failed user units: none"
+else
+  FAIL "failed user units: ${failed_units}"
+fi
+
+printf '\n%s passed, %s warning(s), %s failed\n' "${pass}" "${warn}" "${fail}"
+[ "${fail}" -eq 0 ]

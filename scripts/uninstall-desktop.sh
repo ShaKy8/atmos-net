@@ -14,10 +14,13 @@ ok() { printf '  \033[32m✓\033[0m %s\n' "$*"; }
 
 printf '\n\033[36mRemoving ATMOS//NET desktop integration\033[0m\n\n'
 
-for u in atmos-wallpaper.timer atmos-notify.timer atmos-net.service; do
+# The path unit goes first: the guard would otherwise put the sky back while
+# the background is being handed to the theme further down.
+for u in atmos-wallpaper.path atmos-wallpaper.timer atmos-notify.timer atmos-net.service; do
   systemctl --user disable --now "${u}" >/dev/null 2>&1 || true
 done
 for u in atmos-net.service atmos-wallpaper.service atmos-wallpaper.timer \
+         atmos-wallpaper.path atmos-wallpaper-guard.service \
          atmos-notify.service atmos-notify.timer; do
   rm -f "${UNITS}/${u}"
 done

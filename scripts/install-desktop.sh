@@ -3,7 +3,7 @@
 # Wire ATMOS//NET into the desktop:
 #   - run the server as a systemd user service (starts on login)
 #   - SUPER + SHIFT + W opens the portal fullscreen
-#   - the desktop background becomes the live sky, refreshed every 20 minutes
+#   - the desktop background becomes the live sky, refreshed every 5 minutes
 #   - desktop notifications for severe weather and incoming rain
 #
 # Every file this touches is backed up first. scripts/uninstall-desktop.sh
@@ -32,6 +32,7 @@ echo
 # ---------------------------------------------------------------- systemd
 mkdir -p "${UNITS}"
 for u in atmos-net.service atmos-wallpaper.service atmos-wallpaper.timer \
+         atmos-wallpaper.path atmos-wallpaper-guard.service \
          atmos-notify.service atmos-notify.timer; do
   [ -f "${UNITS}/${u}" ] && cp "${UNITS}/${u}" "${UNITS}/${u}.bak.${STAMP}"
   sed -e "s|__PROJECT__|${PROJECT}|g" -e "s|__NODE__|${NODE}|g" \
@@ -48,7 +49,12 @@ if [ "${ATMOS_SKIP_WALLPAPER:-0}" = "1" ]; then
   warn "wallpaper timer skipped (ATMOS_SKIP_WALLPAPER=1)"
 else
   systemctl --user enable --now atmos-wallpaper.timer >/dev/null 2>&1
-  ok "live wallpaper enabled (every 20 min)"
+  ok "live wallpaper enabled (every 5 min)"
+  # Puts the sky back when a theme change or Omarchy's background switcher
+  # replaces it. It is started by the path unit, so the guard service itself
+  # is not enabled.
+  systemctl --user enable --now atmos-wallpaper.path >/dev/null 2>&1
+  ok "wallpaper guard enabled (restores the sky if it is replaced)"
 fi
 
 # --------------------------------------------------------------- keybinding

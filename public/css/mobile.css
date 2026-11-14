@@ -250,6 +250,13 @@
     gap: 4px;
   }
   .gauge-cell { min-width: 0; }
+  /*
+   * A third of a phone is ~109px, and four of the six notes were wider:
+   * "LIGHT AIR · FROM SSE" ran into "NOTICEABLE HUMIDITY" and off the panel.
+   * They wrap inside their cell here rather than lose their ends to an
+   * ellipsis, since the note is the half of the gauge that is in words.
+   */
+  .gauge-note { white-space: normal; line-height: 1.25; }
 
   /*
    * Sixteen day columns in 114px is 7.6px per day. Give them a

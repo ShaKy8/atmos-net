@@ -152,7 +152,9 @@
 }
 .gauge-cell canvas { width: 100%; flex: 1 1 auto; min-height: 0; }
 .gauge-note {
-  flex: 0 0 auto; text-align: center; padding: 0 4px 1px;
+  /* max-width: centred in a flex column, the note's box was as wide as its
+     text, so nothing ever overflowed it and the ellipsis never applied. */
+  flex: 0 0 auto; max-width: 100%; text-align: center; padding: 0 4px 1px;
   font-size: max(.52rem, var(--fs-floor, 0px)); letter-spacing: .09em; text-transform: uppercase;
   color: var(--faint); pointer-events: none;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;

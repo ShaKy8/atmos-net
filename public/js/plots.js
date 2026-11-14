@@ -662,30 +662,56 @@ export function kpChart(ctx, w, h, hover, { rows, tf, now }) {
   const box = { x: padL, y: padT, w: w - padL - padR, h: h - padT - padB };
   if (box.w < 30) return;
   const n = rows.length;
-  const bw = Math.max(2, box.w / n - 2);
   // Scale to the data but always keep the Kp 5 storm line on screen.
   const top = Math.max(5.6, Math.ceil(Math.max(...rows.map((r) => r.kp)) + 0.8));
   const yOf = (v) => box.y + box.h - (clamp(v, 0, top) / top) * box.h;
 
-  gridY(ctx, box, [3, 5, 7].filter((v) => v <= top).map((v) => ({ v, y: yOf(v) })), String);
+  /*
+   * The bars stop short of a column kept for the axis values, and STORM is
+   * written after the bars where they stay under its line. Both were drawn
+   * first with bars across them: "3" sat on two bars and STORM on one, at the
+   * phone's width and at 1600x857 alike.
+   */
+  const ticks = [3, 5, 7].filter((v) => v <= top);
+  ctx.save(); ctx.font = MONO_SM;
+  const plotW = Math.max(20, box.w - (Math.max(...ticks.map((v) => ctx.measureText(String(v)).width)) + 8));
+  ctx.restore();
+  const per = plotW / n;
+  const bw = Math.max(2, per - 2);
+
+  gridY(ctx, box, ticks.map((v) => ({ v, y: yOf(v) })), String);
 
   // Kp 5 is the storm threshold; mark it explicitly.
   ctx.save();
   ctx.strokeStyle = alpha(STATUS.serious, .5);
   ctx.setLineDash([4, 3]); ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(box.x, yOf(5)); ctx.lineTo(box.x + box.w, yOf(5)); ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.font = UI_LBL; ctx.fillStyle = alpha(STATUS.serious, .8);
-  ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
-  haloText(ctx, 'STORM', box.x + 3, yOf(5) - 2);
   ctx.restore();
 
   rows.forEach((r, i) => {
     const c = r.kp < 3 ? SERIES[0] : r.kp < 5 ? STATUS.good : r.kp < 6 ? STATUS.warn
       : r.kp < 7 ? STATUS.serious : STATUS.crit;
-    const x = box.x + (i * box.w) / n;
+    const x = box.x + i * per;
     capBar(ctx, x, yOf(Math.min(r.kp, top)), bw, box.y + box.h, alpha(c, r.observed === 'observed' ? .9 : .55));
   });
+
+  ctx.save();
+  ctx.font = UI_LBL; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+  const sw = ctx.measureText('STORM').width + 4;
+  const under = (x0) => {
+    for (let i = Math.max(0, Math.floor((x0 - box.x) / per)); i < n && box.x + i * per < x0 + sw; i++) if (rows[i].kp > 5) return false;
+    return true;
+  };
+  let sx = null;
+  for (let x0 = box.x + 3; x0 + sw <= box.x + plotW; x0 += per) if (under(x0)) { sx = x0; break; }
+  if (sx == null) {
+    sx = box.x + 3;
+    ctx.fillStyle = 'rgba(22,33,47,.85)';
+    ctx.fillRect(sx - 2, yOf(5) - 14, sw, 12);
+  }
+  ctx.fillStyle = alpha(STATUS.serious, .8);
+  haloText(ctx, 'STORM', sx, yOf(5) - 2);
+  ctx.restore();
 
   ctx.save();
   ctx.font = MONO_SM; ctx.fillStyle = FAINT;
@@ -697,8 +723,8 @@ export function kpChart(ctx, w, h, hover, { rows, tf, now }) {
     const d = tf.isoDate(r.t);
     if (d === last) return;
     last = d;
-    const x = box.x + (i * box.w) / n + bw / 2;
-    if (x < box.x + 10 || x > box.x + box.w - 10 || x - lastKx < gapK) return;
+    const x = box.x + i * per + bw / 2;
+    if (x < box.x + 10 || x > box.x + plotW - 10 || x - lastKx < gapK) return;
     ctx.fillText(tf.weekday(r.t).toUpperCase(), x, h - padB + 4);
     lastKx = x;
   });
@@ -706,10 +732,10 @@ export function kpChart(ctx, w, h, hover, { rows, tf, now }) {
 
   tag(ctx, box.x + 2, 2, 'planetary K index');
 
-  if (hover && hover.x > box.x && hover.x < box.x + box.w) {
-    const i = clamp(Math.floor(((hover.x - box.x) / box.w) * n), 0, n - 1);
+  if (hover && hover.x > box.x && hover.x < box.x + plotW) {
+    const i = clamp(Math.floor((hover.x - box.x) / per), 0, n - 1);
     const r = rows[i];
-    tooltip(ctx, box.x + (i * box.w) / n + bw / 2, hover.y, [
+    tooltip(ctx, box.x + i * per + bw / 2, hover.y, [
       `${tf.weekday(r.t)} ${tf.hm(r.t)}|`,
       `Kp|${r.kp.toFixed(2)}`,
       `STATUS|${(r.observed || 'predicted').toUpperCase()}`,

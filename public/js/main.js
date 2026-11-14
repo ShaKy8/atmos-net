@@ -460,7 +460,7 @@ function openSettings(event) {
     </div>
     <h3>Keyboard</h3>
     <div class="keyhelp">
-      ${[['1–5', 'switch view'], ['Space', 'play / pause forecast'], ['← →', 'step 1 hour'],
+      ${[['1–6', 'switch view'], ['Space', 'play / pause forecast'], ['← →', 'step 1 hour'],
          ['Shift ← →', 'step 6 hours'], ['N', 'return to now'], ['/', 'search location'],
          ['A', 'alerts'], ['B', 'briefing'], ['S', 'ambient audio'], ['F', 'fullscreen'],
          [',', 'settings'], ['Esc', 'close']]

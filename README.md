@@ -6,7 +6,7 @@
 [![Last commit](https://img.shields.io/github/last-commit/ShaKy8/atmos-net)](https://github.com/ShaKy8/atmos-net/commits/main)
 
 A cyberpunk weather console for one machine. Fullscreen web portal, live WebGL
-sky, five views, and a time scrubber that moves the entire interface — including
+sky, six views, and a time scrubber that moves the entire interface — including
 the sky — through the forecast.
 
 Starts on **New York City** by default (see [Configuration](#configuration)); it
@@ -18,7 +18,7 @@ node server.mjs          # then open http://localhost:7777
 
 ---
 
-## The five views
+## The six views
 
 | Key | View | What it is for |
 |-----|------|----------------|
@@ -27,6 +27,11 @@ node server.mjs          # then open http://localhost:7777
 | `3` | **SKY** | Real sun and moon positions on a celestial dome, solar day, geomagnetic activity, observing conditions |
 | `4` | **AIR** | AQI and pollutant breakdown against EPA/WHO limits, pollen, UV and burn time, comfort |
 | `5` | **DATA** | Forecast against 33 years of local record, multi-model agreement, long-term trend, derived aggregates |
+| `6` | **ABOVE** | Aircraft overhead from volunteer ADS-B feeds, the ISS, the sun and moon; a satellites mode |
+
+RADAR also has a **STORMS** mode (the 🌀 button): live tropical cyclones from NHC with
+the official forecast, cone and model guidance, plus a hurricane atlas where the
+best-track archive is available.
 
 ## The time scrubber
 
@@ -43,7 +48,7 @@ deliberate scrub stops it following until you press `N` or the NOW button.
 
 | Key | Action | | Key | Action |
 |-----|--------|-|-----|--------|
-| `1`–`5` | switch view | | `/` | search location |
+| `1`–`6` | switch view | | `/` | search location |
 | `Space` | play / pause forecast | | `A` | alerts |
 | `←` `→` | step one hour | | `B` | briefing (with speech) |
 | `Shift`+`←` `→` | step six hours | | `S` | ambient audio |
@@ -222,7 +227,8 @@ public/
     gl/sky.js           the sky shader
     lib/astro.js        solar and lunar ephemeris
     lib/util.js         formatting, WMO codes, comfort/AQI/UV scales
-    views/              deck · radar · sky · air · data
+    views/              deck · radar · sky · air · data · overhead
+                        storms (the hurricane mode of radar)
 scripts/                launcher, wallpaper, notifier, install/uninstall
 systemd/                unit templates
 ```
@@ -234,7 +240,8 @@ precipitation share an x-axis but never a y-axis), categorical colours assigned
 in fixed order and never cycled, status colours reserved and always paired with
 a word, recessive grid, hover readout on everything.
 
-The categorical palette is `#00eaff · #ff2d8f · #ffb02e · #a75cff · #8ab6ff`.
+The categorical palette is `#3fd0d8 · #f07aa6 · #f2b45a · #b39dfa · #7fb2f0`
+(`--cy`, `--mg`, `--am`, `--vi` and `--ice` in `public/css/core.css`).
 Lime is deliberately excluded from it — against amber it falls to ΔE 6.6 under
 deuteranopia — and is reserved for status, where a label always accompanies it.
 

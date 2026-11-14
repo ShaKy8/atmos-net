@@ -274,8 +274,18 @@ export function meteogram(ctx, w, h, hover, opts) {
     });
     ctx.save();
     ctx.font = UI_LBL; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-    ['HIGH', 'MID', 'LOW'].forEach((l, j) => {
-      const y = b.y + (b.h / 3) * (j + 0.5);
+    /*
+     * A label per deck only where a row can hold one. At 1600x857 this panel
+     * is 26px tall, so the rows were 8.5px apart under 8px glyphs: three
+     * labels touching, their backing boxes overlapping. Too tight for three,
+     * the top and bottom rows are named and the middle one reads between them;
+     * too tight for two, the panel title says what the rows are.
+     */
+    const rowH = b.h / 3, LABEL_ROW = 13;
+    const named = rowH >= LABEL_ROW ? [0, 1, 2] : rowH * 2 >= LABEL_ROW ? [0, 2] : [];
+    named.forEach((j) => {
+      const l = ['HIGH', 'MID', 'LOW'][j];
+      const y = b.y + rowH * (j + 0.5);
       ctx.fillStyle = 'rgba(22,33,47,.75)';
       ctx.fillRect(b.x + b.w - 30, y - 5, 30, 10);
       ctx.fillStyle = FAINT;
@@ -292,7 +302,14 @@ export function meteogram(ctx, w, h, hover, opts) {
     const vals = visible.map((d) => d.pressure).filter((v) => v != null);
     const lo = Math.min(...vals) - 1, hi = Math.max(...vals) + 1;
     const yOf = (v) => b.y + b.h - ((v - lo) / (hi - lo)) * b.h;
-    gridY(ctx, b, niceTicks(lo, hi, fitTicks(b.h, 2)).map((v) => ({ v, y: yOf(v) })), (v) => (v * 0.02953).toFixed(2));
+    /*
+     * niceTicks treats its count as a hint, so a panel fitTicks allows one
+     * line got two. At 1600x857 this panel is 36px: 30.12 and 29.83 sat 7px
+     * apart, the upper one across the pressure line. fitTicks is the ceiling
+     * here; the lowest lines are kept.
+     */
+    const pn = fitTicks(b.h, 2);
+    gridY(ctx, b, niceTicks(lo, hi, pn).slice(0, pn).map((v) => ({ v, y: yOf(v) })), (v) => (v * 0.02953).toFixed(2));
     neonLine(ctx, visible.filter((d) => d.pressure != null).map((d) => [xOf(d.t), yOf(d.pressure)]),
       SERIES[3], { width: 1.8, glow: 8 });
     tag(ctx, b.x + 2, b.y - 11, 'pressure inHg');

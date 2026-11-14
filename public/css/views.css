@@ -511,6 +511,10 @@
 .oh-side { display: flex; flex-direction: column; gap: var(--gap); min-height: 0; }
 .oh-side > .panel { flex: 0 0 auto; }
 .oh-side > .panel.grow { flex: 1 1 auto; min-height: 0; }
+/* SELECTED keeps room for its heading and a two-line hint. Sharing the leftover
+   height with NEAREST, it came to 79px at 1600x857 and cut the hint's second
+   line in half: 87px fits it. */
+.oh-side > .panel.grow:has(#o-sel) { min-height: 6rem; }
 
 /* A row in NEAREST is a button, because tapping one selects that aircraft. */
 .oh-head, .oh-row {

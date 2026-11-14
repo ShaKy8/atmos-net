@@ -446,6 +446,14 @@ function nearest(arr, t) {
 
 /* ============================================================ spread fan */
 
+/** Width of the column gridY writes its values into, measured, plus a gap. */
+function axisColumn(ctx, ticks, fmt) {
+  ctx.save(); ctx.font = MONO_SM;
+  const wd = Math.max(0, ...ticks.map((v) => ctx.measureText(fmt(v)).width));
+  ctx.restore();
+  return wd + 8;
+}
+
 /**
  * Multi-model agreement. One hue at graded opacity (a sequential encoding of
  * uncertainty), not five categorical colors — the question is "how wide is
@@ -459,10 +467,15 @@ export function spreadFan(ctx, w, h, hover, { rows, tf, now }) {
 
   const lo0 = Math.min(...rows.map((r) => r.min)), hi0 = Math.max(...rows.map((r) => r.max));
   const lo = lo0 - 2, hi = hi0 + 2;
-  const xOf = (t) => box.x + ((t - rows[0].t) / (rows.at(-1).t - rows[0].t)) * box.w;
   const yOf = (v) => box.y + box.h - ((v - lo) / (hi - lo)) * box.h;
+  // The envelope and the mean stop short of a column kept for the axis
+  // values. They ran to the box edge, through "60°", at 390x844 and 1600x857.
+  const ticks = niceTicks(lo, hi, fitTicks(box.h, 4));
+  const deg = (v) => `${Math.round(v)}°`;
+  const plotW = box.w - axisColumn(ctx, ticks, deg);
+  const xOf = (t) => box.x + ((t - rows[0].t) / (rows.at(-1).t - rows[0].t)) * plotW;
 
-  gridY(ctx, box, niceTicks(lo, hi, fitTicks(box.h, 4)).map((v) => ({ v, y: yOf(v) })), (v) => `${Math.round(v)}°`);
+  gridY(ctx, box, ticks.map((v) => ({ v, y: yOf(v) })), deg);
 
   // Envelope
   ctx.save();
@@ -495,7 +508,7 @@ export function spreadFan(ctx, w, h, hover, { rows, tf, now }) {
     lastDay = day;
     const x = xOf(r.t);
     ctx.beginPath(); ctx.moveTo(x + .5, box.y); ctx.lineTo(x + .5, box.y + box.h); ctx.stroke();
-    if (x < box.x + 12 || x > box.x + box.w - 12 || x - lastLx < gapD) continue;
+    if (x < box.x + 12 || x > box.x + plotW - 12 || x - lastLx < gapD) continue;
     ctx.fillText(tf.weekday(r.t).toUpperCase(), x, h - padB + 5);
     lastLx = x;
   }
@@ -510,8 +523,8 @@ export function spreadFan(ctx, w, h, hover, { rows, tf, now }) {
     { label: 'model range', short: 'range', color: alpha(SERIES[0], .35) },
   ], { short: 'model spread °F' });
 
-  if (hover && hover.x > box.x && hover.x < box.x + box.w) {
-    const t = rows[0].t + ((hover.x - box.x) / box.w) * (rows.at(-1).t - rows[0].t);
+  if (hover && hover.x > box.x && hover.x < box.x + plotW) {
+    const t = rows[0].t + ((hover.x - box.x) / plotW) * (rows.at(-1).t - rows[0].t);
     const r = nearest(rows, t);
     if (r) {
       const x = xOf(r.t);
@@ -554,11 +567,16 @@ export function climateEnvelope(ctx, w, h, hover, { days, climate, tf, doyOf }) 
   const all = rows.flatMap((r) => [r.c.recordHigh, r.c.recordLow, r.tmax, r.tmin]).filter((v) => v != null);
   const lo = Math.min(...all) - 3, hi = Math.max(...all) + 3;
   const n = rows.length;
-  const colW = box.w / n;
+  // The columns stop short of the axis values: at 390x844 the last day's
+  // bar covered "60°" down to its "6", and the record band ran under the rest.
+  const ticks = niceTicks(lo, hi, fitTicks(box.h, 4));
+  const deg = (v) => `${Math.round(v)}°`;
+  const plotW = box.w - axisColumn(ctx, ticks, deg);
+  const colW = plotW / n;
   const xOf = (i) => box.x + colW * (i + 0.5);
   const yOf = (v) => box.y + box.h - ((v - lo) / (hi - lo)) * box.h;
 
-  gridY(ctx, box, niceTicks(lo, hi, fitTicks(box.h, 4)).map((v) => ({ v, y: yOf(v) })), (v) => `${Math.round(v)}°`);
+  gridY(ctx, box, ticks.map((v) => ({ v, y: yOf(v) })), deg);
 
   // Record envelope: the widest band, faintest ink.
   ctx.save();
@@ -639,7 +657,7 @@ export function climateEnvelope(ctx, w, h, hover, { days, climate, tf, doyOf }) 
     { label: 'record range', short: 'record', color: 'rgba(255,255,255,.2)' },
   ], { short: 'climate record °F' });
 
-  if (hover && hover.x > box.x && hover.x < box.x + box.w) {
+  if (hover && hover.x > box.x && hover.x < box.x + plotW) {
     const i = clamp(Math.floor((hover.x - box.x) / colW), 0, n - 1);
     const r = rows[i];
     const anomalyH = r.tmax - r.c.normalHigh;

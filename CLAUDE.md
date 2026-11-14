@@ -84,13 +84,16 @@ There is no build, bundler, linter, formatter or `npm install`. Node >= 20; CI r
 To look at the page without a display (the Chromium the wallpaper script already uses):
 
 ```bash
-chromium --headless --no-sandbox --hide-scrollbars --user-data-dir="$(mktemp -d)" \
+( profile=$(mktemp -d); trap 'rm -rf -- "$profile"' EXIT
+chromium --headless --no-sandbox --hide-scrollbars --user-data-dir="$profile" \
   --enable-unsafe-swiftshader --use-gl=angle --use-angle=swiftshader \
   --window-size=1600,1000 --force-device-scale-factor=1 --virtual-time-budget=9000 \
-  --screenshot=/tmp/atmos.png 'http://127.0.0.1:7778/?q=1#radar'
+  --screenshot=/tmp/atmos.png 'http://127.0.0.1:7778/?q=1#radar' )
 ```
 
-Use `--window-size=390,844` for the phone layout. Add `--enable-logging=stderr --v=0 2>&1 | grep CONSOLE` to read the page's console. `#deck|radar|sky|air|data|overhead` deep-links a view and `?q=0`–`3` pins the render tier. In a browser console, `window.ATMOS` is `{ store, sky, perf, setView, views }`.
+The subshell's trap deletes the throwaway profile when Chromium exits, fails or is interrupted (anything but `kill -9`); a bare `--user-data-dir="$(mktemp -d)"` leaves one in `/tmp` per run.
+
+Use `--window-size=390,844` for the phone layout. To read the page's console, add `--enable-logging=stderr --v=0` before the URL and `2>&1 | grep CONSOLE` after the closing `)`. `#deck|radar|sky|air|data|overhead` deep-links a view and `?q=0`–`3` pins the render tier. In a browser console, `window.ATMOS` is `{ store, sky, perf, setView, views }`.
 
 Desktop commands act on the real desktop, so see *Running desktop scripts to "test"* below before using them: `./scripts/atmos-check` (read-only health check), `systemctl --user status atmos-net`, `./scripts/atmos-wallpaper [--force]`, `./scripts/install-desktop.sh`, `./scripts/uninstall-desktop.sh`.
 

@@ -102,7 +102,9 @@
 .hero-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .hero-temp {
   font-family: var(--ui); font-weight: 700;
-  font-size: clamp(4.6rem, 9.5vw, 9rem);
+  /* Capped by height too: on a short window the width alone made the numeral
+     the tallest thing in a 270px row and pushed today's high and low out. */
+  font-size: clamp(4.6rem, min(9.5vw, 11.5vh), 9rem);
   line-height: .84; letter-spacing: -.035em;
   color: var(--ink);
 }
@@ -128,6 +130,15 @@
   display: flex; gap: 14px; margin-top: 8px;
   border-top: 1px solid rgba(255,255,255,.07); padding-top: 8px;
 }
+/*
+ * Scrolls, as the side column does. At 1600x857 the hero's row is 270px and
+ * its content 336px: the panel's clip-path cut today's high and low in half
+ * and hid the sparkline and the sun times, with nothing overflowing the page
+ * to give it away. The rows keep their natural height so nothing is squeezed
+ * under the next one.
+ */
+.deck > .hero > .body { overflow-y: auto; overscroll-behavior: contain; }
+.deck > .hero > .body > * { flex-shrink: 0; }
 
 /* --- gauge band --- */
 .gauge .body { flex-direction: row; gap: 4px; align-items: stretch; }

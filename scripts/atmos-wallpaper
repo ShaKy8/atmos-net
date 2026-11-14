@@ -158,7 +158,10 @@ GPU_FLAGS=(--use-gl=angle --use-angle=gl)
 RENDERER=gpu
 if ! render "${GPU_FLAGS[@]}"; then
   RENDERER=swiftshader
-  if ! render --disable-gpu --enable-unsafe-swiftshader --use-gl=angle --use-angle=swiftshader; then
+  # No --disable-gpu: --use-angle=swiftshader already picks the software
+  # renderer, and asking for no GPU and a forced GPU backend at once is a
+  # contradiction Chromium resolves its own way from release to release.
+  if ! render --enable-unsafe-swiftshader --use-gl=angle --use-angle=swiftshader; then
     echo "atmos-wallpaper: render produced no usable image" >&2
     exit 1
   fi

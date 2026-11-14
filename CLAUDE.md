@@ -85,7 +85,7 @@ To look at the page without a display (the Chromium the wallpaper script already
 
 ```bash
 chromium --headless --no-sandbox --hide-scrollbars --user-data-dir="$(mktemp -d)" \
-  --disable-gpu --enable-unsafe-swiftshader --use-gl=angle --use-angle=swiftshader \
+  --enable-unsafe-swiftshader --use-gl=angle --use-angle=swiftshader \
   --window-size=1600,1000 --force-device-scale-factor=1 --virtual-time-budget=9000 \
   --screenshot=/tmp/atmos.png 'http://127.0.0.1:7778/?q=1#radar'
 ```

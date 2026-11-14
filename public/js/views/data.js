@@ -12,7 +12,7 @@ import { meteogram, spreadFan, climateEnvelope } from '../plots.js';
 import {
   SERIES, STATUS, INK, DIM, FAINT, mount, spark, neonLine, smoothPath,
   alpha, tag, niceTicks, gridY, mixHex, capBar, fitTicks, fitStride, fitLabel,
-  UI_LBL,
+  UI_LBL, MONO_SM,
 } from '../charts.js';
 import { fmt as F, clamp, dayOfYearOf, dur } from '../lib/util.js';
 
@@ -95,14 +95,26 @@ export function createData(root) {
 
     const vals = a.map((d) => d.mean);
     const lo = Math.min(...vals) - 0.4, hi = Math.max(...vals) + 0.4;
-    const xOf = (i) => box.x + (i / (a.length - 1)) * box.w;
     const yOf = (v) => box.y + box.h - ((v - lo) / (hi - lo)) * box.h;
 
-    gridY(ctx, box, niceTicks(lo, hi, fitTicks(box.h, 3)).map((v) => ({ v, y: yOf(v) })), (v) => `${v.toFixed(1)}°`);
+    /*
+     * The bars stop short of a column kept for the axis values. gridY writes
+     * them inside the box's right edge, and the last bar was centred on that
+     * edge: 62.0°, 64.0° and 66.0° each sat on a bar at 1600x857.
+     */
+    const ticks = niceTicks(lo, hi, fitTicks(box.h, 3));
+    const tickText = (v) => `${v.toFixed(1)}°`;
+    ctx.save(); ctx.font = MONO_SM;
+    const axisW = Math.max(...ticks.map((v) => ctx.measureText(tickText(v)).width)) + 8;
+    ctx.restore();
+    const plotW = Math.max(20, box.w - axisW);
+    const bw = Math.max(2, plotW / a.length - 2);
+    const xOf = (i) => box.x + bw / 2 + (i / (a.length - 1)) * (plotW - bw);
+
+    gridY(ctx, box, ticks.map((v) => ({ v, y: yOf(v) })), tickText);
 
     // Bars coloured by departure from the period mean: diverging, warm/cool.
     const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
-    const bw = Math.max(2, box.w / a.length - 2);
     a.forEach((d, i) => {
       const dev = d.mean - mean;
       const c = dev >= 0
@@ -130,7 +142,7 @@ export function createData(root) {
     ctx.font = "500 11.5px 'JetBrains Mono', monospace";
     ctx.fillStyle = FAINT; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     // Every fifth year, or fewer where five years is not five labels wide.
-    const yearStep = 5 * fitStride(Math.ceil(a.length / 5), box.w,
+    const yearStep = 5 * fitStride(Math.ceil(a.length / 5), plotW,
       ctx.measureText('2020').width);
     a.forEach((d, i) => {
       if (d.year % yearStep) return;
@@ -158,8 +170,8 @@ export function createData(root) {
     ctx.restore();
     if (title) tag(ctx, box.x + 2, 3, title);
 
-    if (hover && hover.x > box.x && hover.x < box.x + box.w) {
-      const i = clamp(Math.round(((hover.x - box.x) / box.w) * (a.length - 1)), 0, a.length - 1);
+    if (hover && hover.x > box.x && hover.x < box.x + plotW) {
+      const i = clamp(Math.round(((hover.x - box.x - bw / 2) / (plotW - bw)) * (a.length - 1)), 0, a.length - 1);
       const d = a[i];
       ctx.save();
       ctx.fillStyle = 'rgba(22,33,47,.94)';

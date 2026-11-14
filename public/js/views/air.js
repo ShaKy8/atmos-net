@@ -161,15 +161,12 @@ export function createAir(root) {
     const xOf = (t) => box.x + ((t - rows[0].t) / (rows.at(-1).t - rows[0].t)) * box.w;
     const yOf = (v) => box.y + box.h - (clamp(v, 0, maxA) / maxA) * box.h;
 
-    for (const [v, c, l] of [[50, STATUS.good, 'GOOD'], [100, STATUS.warn, 'MODERATE'], [150, STATUS.serious, 'SENSITIVE']]) {
-      if (v > maxA) continue;
+    const LEVELS = [[50, STATUS.good, 'GOOD'], [100, STATUS.warn, 'MODERATE'], [150, STATUS.serious, 'SENSITIVE']]
+      .filter(([v]) => v <= maxA);
+    for (const [v, c] of LEVELS) {
       ctx.save();
       ctx.strokeStyle = alpha(c, .28); ctx.setLineDash([4, 3]);
       ctx.beginPath(); ctx.moveTo(box.x, yOf(v)); ctx.lineTo(box.x + box.w, yOf(v)); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.font = "500 11.5px 'JetBrains Mono', monospace";
-      ctx.fillStyle = alpha(c, .85); ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
-      haloText(ctx, l, box.x + box.w - 2, yOf(v) - 2);
       ctx.restore();
     }
 
@@ -180,6 +177,36 @@ export function createAir(root) {
       capBar(ctx, box.x + (i * box.w) / n, yOf(d.aqi), bw, box.y + box.h,
         alpha(aqiCategory(d.aqi).color, .8), 2);
     });
+
+    /*
+     * Each line's name sits just above its line, after the bars, at the
+     * rightmost place where the bars beneath stay under that line. Pinned to
+     * the right edge and drawn first, GOOD went under two bars of a day that
+     * rose past 50. Where no stretch is clear the name keeps the right edge
+     * on a backing of its own.
+     */
+    ctx.save();
+    ctx.font = "500 11.5px 'JetBrains Mono', monospace";
+    ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
+    const per = box.w / n;
+    for (const [v, c, l] of LEVELS) {
+      const lw = ctx.measureText(l).width + 4;
+      const clear = (right) => {
+        const i0 = Math.max(0, Math.floor((right - lw - box.x) / per)), i1 = Math.min(n - 1, Math.floor((right - box.x) / per));
+        for (let i = i0; i <= i1; i++) if ((rows[i].aqi ?? 0) > v) return false;
+        return true;
+      };
+      let x = null;
+      for (let right = box.x + box.w - 2; right - lw >= box.x; right -= per) if (clear(right)) { x = right; break; }
+      if (x == null) {
+        x = box.x + box.w - 2;
+        ctx.fillStyle = 'rgba(22,33,47,.85)';
+        ctx.fillRect(x - lw, yOf(v) - 15, lw + 2, 13);
+      }
+      ctx.fillStyle = alpha(c, .85);
+      haloText(ctx, l, x, yOf(v) - 2);
+    }
+    ctx.restore();
 
     ctx.save();
     ctx.font = "500 11.5px 'JetBrains Mono', monospace";

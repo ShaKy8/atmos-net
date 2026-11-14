@@ -321,7 +321,11 @@ function climateURL(lat, lon) {
 /** lat/lon from the query, finite and on the globe, or a 400. */
 function point(q) {
   // Number(null) and Number('') are 0, so a missing parameter read as the
-  // equator or the meridian; require both to be there.
+  // equator or the meridian; require both to be there. /api/bundle,
+  // /api/observations and /api/aircraft once checked with Number() alone:
+  // a request with no parameters answered 200 for 0,0, having asked the
+  // upstreams (the volunteer aircraft feeds among them) about a place
+  // nobody named.
   if ([q.get('lat'), q.get('lon')].some((v) => v == null || !v.trim())) throw new HttpError(400, 'lat/lon required');
   const lat = Number(q.get('lat')), lon = Number(q.get('lon'));
   if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
@@ -623,8 +627,7 @@ const routes = {
 
   /** Everything the console needs for one location, in one round trip. */
   async '/api/bundle'(q) {
-    const lat = Number(q.get('lat')), lon = Number(q.get('lon'));
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) throw new HttpError(400, 'lat/lon required');
+    const { lat, lon } = point(q);
     return bundleFor(lat, lon);
   },
 
@@ -743,8 +746,7 @@ const routes = {
    * next to what the model thinks.
    */
   async '/api/observations'(q) {
-    const lat = Number(q.get('lat')), lon = Number(q.get('lon'));
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) throw new HttpError(400, 'lat/lon required');
+    const { lat, lon } = point(q);
     const key = `obs_${lat.toFixed(3)},${lon.toFixed(3)}`;
     const hit = memGet(key);
     if (hit) return hit;
@@ -998,10 +1000,7 @@ const routes = {
   },
 
   async '/api/aircraft'(q) {
-    const lat = Number(q.get('lat')), lon = Number(q.get('lon'));
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-      const e = new Error('lat and lon are required'); e.status = 400; throw e;
-    }
+    const { lat, lon } = point(q);
     const nm = Math.max(5, Math.min(120, Number(q.get('dist')) || 40));
     const key = `ac_${lat.toFixed(1)}_${lon.toFixed(1)}_${nm}`;
     const hit = memGet(key);
@@ -1231,8 +1230,23 @@ function slowNote(route, t0) {
 }
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  const pathname = decodeURIComponent(url.pathname);
+  /*
+   * A request this cannot parse is answered 400, not left unanswered.
+   *
+   * Both lines throw on input any client can send: decodeURIComponent on a
+   * percent escape it cannot decode (`/%E0%A4%A`, `/api/%zz`), new URL on a
+   * target such as `//[` or a Host header such as `a b`. They ran above the
+   * route's try, so the throw became an unhandled rejection and nothing was
+   * ever sent: curl waited out its whole timeout, and a line in the log
+   * (`[unhandled] URIError: URI malformed`) was the only trace.
+   */
+  let url, pathname;
+  try {
+    url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    pathname = decodeURIComponent(url.pathname);
+  } catch {
+    return send(res, 400, 'bad request', 'text/plain');
+  }
 
   if (routes[pathname]) {
     /*

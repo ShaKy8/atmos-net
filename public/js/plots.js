@@ -379,12 +379,16 @@ export function meteogram(ctx, w, h, hover, opts) {
     ctx.restore();
   }
 
-  /* --- markers --- */
+  /* --- markers ---
+   * Drawn panel by panel, so the lines break across the caption rows
+   * between panels. One line down the full height ran through
+   * "CLOUD DECKS %" and "CAPE J/KG" on DATA at 1600x857 and 390x844. */
+  const stack = panels.map((p) => boxes[p]);
   if (now != null && now >= span.lo && now <= span.hi) {
-    marker(ctx, xOf(now), full, alpha(STATUS.good, .9), 'NOW', { dash: [3, 3] });
+    stack.forEach((b, i) => marker(ctx, xOf(now), b, alpha(STATUS.good, .9), i ? null : 'NOW', { dash: [3, 3] }));
   }
   if (cursor != null && Math.abs(cursor - (now ?? cursor)) > 90e3 && cursor >= span.lo && cursor <= span.hi) {
-    marker(ctx, xOf(cursor), full, SERIES[1], null);
+    stack.forEach((b) => marker(ctx, xOf(cursor), b, SERIES[1], null));
   }
 
   /* --- hover --- */

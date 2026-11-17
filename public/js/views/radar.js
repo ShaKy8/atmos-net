@@ -134,7 +134,8 @@ export function createRadar(root) {
     }
     if (store.loc) {
       const [x, y] = m.project(store.loc.lat, store.loc.lon);
-      drawMarker(ctx, x, y, SERIES[1], store.loc.name.toUpperCase());
+      drawMarker(ctx, x, y, SERIES[1], store.loc.name.toUpperCase(), 0,
+        (bx, by, bw, bh) => m.inkIn('labels', bx, by, bw, bh));
     }
     drawScaleBar(ctx, m, 14, m.h - 14);
 

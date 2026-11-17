@@ -150,12 +150,26 @@ export function createOverhead(root) {
     ctx.font = "500 11.5px 'JetBrains Mono', monospace";
     // Outlined, in the full accent: at .4 alpha they read only on a black map.
     ctx.fillStyle = SERIES[0];
-    ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    /*
+     * Each label goes where the ring crosses the least place-name ink, top
+     * first. Fixed at the top, they sat on town names in the label tiles
+     * (and off the canvas once a ring outgrew it).
+     */
+    const ANGLES = [0, -35, 35, -70, 70, -110, 110, 180];
     for (const nm of [10, 20, 40]) {
       const r = (nm * NM) / mPerPx;
       if (r < 24 || r > Math.max(m.w, m.h)) continue;
       ctx.beginPath(); ctx.arc(ox, oy, r, 0, Math.PI * 2); ctx.stroke();
-      haloText(ctx, `${nm} NM`, ox, oy - r - 2);
+      const text = `${nm} NM`, tw = ctx.measureText(text).width + 4;
+      let lx = ox, ly = oy - r - 8, best = Infinity;
+      for (const a of ANGLES) {
+        const rad = (a * Math.PI) / 180;
+        const px = ox + r * Math.sin(rad), py = a ? oy - r * Math.cos(rad) : oy - r - 8;
+        const v = m.inkIn('labels', px - tw / 2 - 3, py - 10, tw + 6, 20);   // 3px margin, as drawMarker
+        if (v < best - 0.02) { best = v; lx = px; ly = py; }
+      }
+      haloText(ctx, text, lx, ly);
     }
     ctx.restore();
 

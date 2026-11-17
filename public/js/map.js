@@ -334,6 +334,43 @@ export class SlippyMap {
     return settled;
   }
 
+  /**
+   * Share (0-1) of a viewport rectangle covered by the named layer's drawn
+   * pixels, read from its loaded tiles. The place names are Esri tiles, not
+   * data, so this is the only way to know where they are: the RADAR home
+   * label sat on "Murrieta" and the ABOVE ring labels on town names until
+   * they started asking. Off the canvas counts as covered; a hidden layer, a
+   * tile not yet loaded or an unreadable one counts as clear.
+   */
+  inkIn(name, x, y, w, h) {
+    if (x < 0 || y < 0 || x + w > this.w || y + h > this.h) return 1;
+    const layer = this.layers.find((l) => l.name === name);
+    if (!layer || layer.enabled === false || layer.opacity === 0) return 0;
+    x = Math.round(x); y = Math.round(y); w = Math.max(1, Math.round(w)); h = Math.max(1, Math.round(h));
+    const zi = Math.max(0, Math.min(this.maxZoom, Math.round(this.zoom)));
+    const originX = proj.lonToWorld(this.lon, this.zoom) - this.w / 2;
+    const originY = proj.latToWorld(this.lat, this.zoom) - this.h / 2;
+    const { size, tiles } = this._layerTiles(layer, zi, originX, originY);
+    const c = this._inkCanvas || (this._inkCanvas = document.createElement('canvas'));
+    c.width = w; c.height = h;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    let drew = false;
+    for (const { tx, ty, url } of tiles) {
+      const dx = Math.round(tx * size - originX), dy = Math.round(ty * size - originY);
+      if (dx > x + w || dy > y + h || dx + size < x || dy + size < y) continue;
+      const hit = cache.get(url);
+      if (hit?.state !== 'ok') continue;
+      g.drawImage(hit.img, dx - x, dy - y, Math.ceil(size), Math.ceil(size));
+      drew = true;
+    }
+    if (!drew) return 0;
+    let px;
+    try { px = g.getImageData(0, 0, w, h).data; } catch { return 0; }
+    let ink = 0;
+    for (let i = 3; i < px.length; i += 4) if (px[i] > 64) ink++;
+    return ink / (w * h);
+  }
+
   render() {
     const { ctx, w, h } = this;
     if (!w || !h) return;
@@ -413,8 +450,13 @@ export function drawGeometry(ctx, map, geom, { stroke, fill, width = 1.5, glow =
   }
 }
 
-/** The "you are here" reticle. */
-export function drawMarker(ctx, x, y, color = '#f07aa6', label = null, pulse = 0) {
+/**
+ * The "you are here" reticle. `ink(x, y, w, h)` -> 0-1, when given, scores
+ * where the label may go (right, left, above, below the reticle): the label
+ * takes the clearest spot and stays on the right unless another is clearly
+ * better. Without it the label is always on the right.
+ */
+export function drawMarker(ctx, x, y, color = '#f07aa6', label = null, pulse = 0, ink = null) {
   ctx.save();
   ctx.shadowColor = color; ctx.shadowBlur = 7;
   ctx.strokeStyle = color; ctx.lineWidth = 1.5;
@@ -441,10 +483,22 @@ export function drawMarker(ctx, x, y, color = '#f07aa6', label = null, pulse = 0
     ctx.letterSpacing = '1.4px';
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     const w = ctx.measureText(label).width + 10;
+    // The arms reach r + 7 from the centre, so above and below clear them.
+    const spots = [[x + r + 8, y - 7], [x - r - 8 - w, y - 7], [x - w / 2, y - r - 26], [x - w / 2, y + r + 12]];
+    let [bx, by] = spots[0];
+    if (ink) {
+      let best = Infinity;
+      for (const [sx, sy] of spots) {
+        // A 3px margin: on the box alone, the right spot over "Murrieta"
+        // scored 0.009, since only the box's edge cut the name's tops.
+        const v = ink(sx - 3, sy - 3, w + 6, 20);
+        if (v < best - 0.02) { best = v; bx = sx; by = sy; }
+      }
+    }
     ctx.fillStyle = 'rgba(22,33,47,.85)';
-    ctx.fillRect(x + r + 8, y - 7, w, 14);
+    ctx.fillRect(bx, by, w, 14);
     ctx.fillStyle = color;
-    ctx.fillText(label, x + r + 13, y);
+    ctx.fillText(label, bx + 5, by + 7);
   }
   ctx.restore();
 }

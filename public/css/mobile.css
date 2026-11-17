@@ -303,8 +303,27 @@
      457px; on a phone they take their content and the view scrolls. */
   .radar-side > *, .radar-side > .grow { flex: 0 0 auto !important; }
 
-  /* Six swatches on one nowrap line measured ~426px. */
-  .radar-legend { flex-wrap: wrap !important; row-gap: 4px; max-width: 70vw; }
+  /* Six swatches on one nowrap line measured ~426px. Wrapped to 70vw over the
+     map they took three rows at 390x844 and hid Lancaster, Palmdale and
+     Santa Clarita. On a phone the legend is a strip under the map instead:
+     the map is the grid's first row, and the canvas, stamp, tools and frames
+     are positioned against that row (an absolute child of a grid takes its
+     grid area as containing block), so none of them sit on the legend.
+     The row's floor keeps the six 44px tools above the frame strip: at
+     320x700 a plain 1fr row left 260px and the tools ran onto the strip. */
+  .radar .radar-main { display: grid; grid-template-rows: minmax(calc(6 * var(--tap) + 104px), 1fr) auto; }
+  .radar .radar-main > canvas.fill, .radar .radar-tools, .radar .radar-frames,
+  .radar .radar-stamp { grid-row: 1 / 2; grid-column: 1; }   /* `1` alone ends at the padding edge */
+  .radar .radar-hud { display: contents; }
+  .radar .radar-stamp {
+    position: absolute; top: 10px; left: 12px; z-index: 3;
+    pointer-events: none; max-width: calc(100% - 90px);
+  }
+  .radar-legend {
+    grid-row: 2; grid-column: 1; pointer-events: none;
+    flex-wrap: wrap !important; justify-content: center; row-gap: 4px;
+    background: var(--panel-solid); border-top: 1px solid rgba(255,255,255,.08);
+  }
   .radar-tools .tl-btn { min-width: var(--tap); min-height: var(--tap); }
   .radar-frames canvas { height: 34px; touch-action: none; }
 

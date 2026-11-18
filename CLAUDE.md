@@ -93,6 +93,8 @@ chromium --headless --no-sandbox --hide-scrollbars --user-data-dir="$profile" \
 
 The subshell's trap deletes the throwaway profile when Chromium exits, fails or is interrupted (anything but `kill -9`); a bare `--user-data-dir="$(mktemp -d)"` leaves one in `/tmp` per run.
 
+Headless captures of RADAR and ABOVE at desktop size are not evidence about the maps. Headless Chromium starves `requestAnimationFrame` at that size, so `SlippyMap` stops redrawing and never re-requests the label tiles it turned away at its in-flight cap. Measured at 1600×857: ABOVE under SwiftShader showed only ARIZONA and CALIFORNIA. RADAR, even on the real GPU, produced one frame in 8 s with `--virtual-time-budget`. The same page in a real browser at 1600 wide shows every town name and plays the loop smoothly. Phone-size captures render, but slowly. Check map labels and motion at desktop size in a real browser, not with this command.
+
 Use `--window-size=390,844` for the phone layout. To read the page's console, add `--enable-logging=stderr --v=0` before the URL and `2>&1 | grep CONSOLE` after the closing `)`. `#deck|radar|sky|air|data|overhead` deep-links a view and `?q=0`–`3` pins the render tier. In a browser console, `window.ATMOS` is `{ store, sky, perf, setView, views }`.
 
 Desktop commands act on the real desktop, so see *Running desktop scripts to "test"* below before using them: `./scripts/atmos-check` (read-only health check), `systemctl --user status atmos-net`, `./scripts/atmos-wallpaper [--force]`, `./scripts/install-desktop.sh`, `./scripts/uninstall-desktop.sh`.
